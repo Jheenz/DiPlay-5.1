@@ -1,11 +1,13 @@
 package com.shilapi.xcertplay.media
 
+import android.content.Context
 import android.media.AudioFormat as AndroidAudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.NoiseSuppressor
+import android.os.Build
 import android.util.Log
 import com.shilapi.xcertplay.airplay.AudioCodecKind
 import com.shilapi.xcertplay.airplay.MicrophoneConfig
@@ -26,6 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 internal class MicrophoneUplink(
     private val config: MicrophoneConfig,
+    private val context: Context?,
     private val onDiagnostic: (String) -> Unit = {},
 ) : Closeable {
     private val running = AtomicBoolean(false)
@@ -77,17 +80,14 @@ internal class MicrophoneUplink(
         }
         val bufferSize = maxOf(minBuffer * 2, config.frameBytes * 4)
         val nextRecorder = try {
-            AudioRecord.Builder()
-                .setAudioSource(source)
-                .setAudioFormat(
-                    AndroidAudioFormat.Builder()
-                        .setEncoding(AndroidAudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(config.sampleRate)
-                        .setChannelMask(channelMask)
-                        .build(),
-                )
-                .setBufferSizeInBytes(bufferSize)
-                .build()
+            LegacyAudioPlatform.createRecorder(
+                context,
+                source,
+                config.sampleRate,
+                channelMask,
+                AndroidAudioFormat.ENCODING_PCM_16BIT,
+                bufferSize,
+            )
         } catch (error: Exception) {
             Log.e(TAG, "microphone recorder creation failed", error)
             stats.failure(MicrophoneFailureStage.RECORDER_CREATION, error)
@@ -186,7 +186,11 @@ internal class MicrophoneUplink(
         try {
             while (running.get()) {
                 stats.reading()
-                val count = recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_BLOCKING)
+                val count = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    recorder.read(readBuffer, 0, readBuffer.size, AudioRecord.READ_BLOCKING)
+                } else {
+                    LegacyAudioPlatform.read(recorder, readBuffer, 0, readBuffer.size)
+                }
                 stats.read(count)
                 if (count < 0) {
                     if (running.get()) {
@@ -263,7 +267,12 @@ internal class MicrophoneUplink(
         }
     }
 
-    private fun routeType(recorder: AudioRecord): Int? = runCatching { recorder.routedDevice?.type }.getOrNull()
+    private fun routeType(recorder: AudioRecord): Int? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching { recorder.routedDevice?.type }.getOrNull()
+        } else {
+            null
+        }
 
     override fun close() {
         if (!running.compareAndSet(true, false)) {
