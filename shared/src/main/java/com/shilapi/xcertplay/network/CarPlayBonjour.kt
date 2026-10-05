@@ -3,7 +3,6 @@ package com.shilapi.xcertplay.network
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
-import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import com.shilapi.xcertplay.airplay.AirPlayConfig
@@ -19,6 +18,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.nio.charset.StandardCharsets
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
@@ -139,16 +139,20 @@ class CarPlayBonjour(
     private val config: AirPlayConfig,
     private val identity: AirPlayIdentity,
     private val advertisedHost: String? = null,
-    private val useInterfaceMdns: Boolean = false,
+    useInterfaceMdns: Boolean = false,
     private val onEvent: (CarPlayBonjourEvent) -> Unit = {},
     additionalAddresses: List<InetAddress> = emptyList(),
+    private val probeControlService: Boolean = true,
 ) : Closeable {
+    // API 22's MulticastSocket binds before enabling reuse, conflicting with netd on UDP 5353.
+    private val interfaceMdnsEnabled = useInterfaceMdns && Build.VERSION.SDK_INT >= 23
+    private val legacyNsdFallback = useInterfaceMdns && Build.VERSION.SDK_INT < 23
     private val nsdManager = (context.applicationContext ?: context)
         .getSystemService(Context.NSD_SERVICE) as NsdManager
     private val services = LinkedBlockingQueue<NsdServiceInfo>()
     private val interfaceServices = LinkedBlockingQueue<Pair<CarPlayBonjourEndpoint, InetAddress>>()
     private val discoveryEvents = LinkedBlockingQueue<CarPlayBonjourEvent.Discovery>(32)
-    private val seenServices = ConcurrentHashMap.newKeySet<String>()
+    private val seenServices = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
     private val lifecycleLock = Any()
     private val localAdvertisedAddress = advertisedHostAddress()
     private val advertisedAddresses = (listOfNotNull(localAdvertisedAddress) + additionalAddresses).distinct()
@@ -167,8 +171,10 @@ class CarPlayBonjour(
             "connectProbe2xx=${successfulProbeCount.get()} lastProbe=${lastProbe.get()} " +
             "mdnsFamilies=$publishedFamilies"
     private val multicastLock = (context.applicationContext ?: context)
-        .getSystemService(WifiManager::class.java)
-        .createMulticastLock("carplay-bonjour").apply { setReferenceCounted(false) }
+        .wifiService()
+        ?.let { it.createMulticastLock("carplay-bonjour") }
+        ?.apply { setReferenceCounted(false) }
+        ?: throw IllegalStateException("WifiManager is unavailable")
 
     private var started = false
     @Volatile
@@ -270,7 +276,11 @@ class CarPlayBonjour(
             started = true
             try {
                 multicastLock.acquire()
-                if (useInterfaceMdns) {
+                if (legacyNsdFallback) {
+                    requireNotNull(localAdvertisedAddress) { "Interface mDNS requires a local advertised address" }
+                    Log.i(TAG, "API 22 mDNS uses system NSD; interface scope is managed by Android")
+                }
+                if (interfaceMdnsEnabled) {
                     requireNotNull(localAdvertisedAddress) {
                         "Interface mDNS requires a local advertised address"
                     }
@@ -296,6 +306,7 @@ class CarPlayBonjour(
                         discoveryListener,
                     )
                     discoveryRequested = true
+                    publishedFamilies = "system_nsd"
                 }
                 worker = Thread(::runWorker, WORKER_NAME).apply {
                     isDaemon = true
@@ -389,14 +400,14 @@ class CarPlayBonjour(
 
     private fun runWorker() {
         while (!closed) {
-            if (useInterfaceMdns) {
+            if (interfaceMdnsEnabled) {
                 try {
                     while (true) emit(discoveryEvents.poll() ?: break)
                     val (endpoint, address) = interfaceServices.poll(
                         WORKER_POLL_MILLIS, TimeUnit.MILLISECONDS,
                     ) ?: continue
                     emit(CarPlayBonjourEvent.Resolved(endpoint))
-                    probe(endpoint, address)?.let(::emit)
+                    if (probeControlService) probe(endpoint, address)?.let(::emit)
                 } catch (_: InterruptedException) {
                     return
                 } catch (error: Exception) {
@@ -431,6 +442,9 @@ class CarPlayBonjour(
             ?.get("id")
             ?.let(::decodeTxtValue)
             ?.takeIf { it.isNotBlank() }
+        if (Build.VERSION.SDK_INT < 23 && bluetoothId == null) {
+            Log.i(TAG, "Legacy NSD resolved a peer address without a TXT id")
+        }
         val endpoint = CarPlayBonjourEndpoint(
             serviceName = serviceName,
             host = host,
@@ -438,7 +452,7 @@ class CarPlayBonjour(
             bluetoothId = bluetoothId,
         )
         emit(CarPlayBonjourEvent.Resolved(endpoint))
-        probe(endpoint, address)?.let(::emit)
+        if (probeControlService) probe(endpoint, address)?.let(::emit)
     }
 
     @Suppress("DEPRECATION")

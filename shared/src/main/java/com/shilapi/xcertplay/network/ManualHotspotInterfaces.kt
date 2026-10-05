@@ -17,12 +17,15 @@ internal class ManualHotspotInterfaces(
     private val context: Context,
     private val onDiagnostic: (String) -> Unit = {},
 ) : Closeable {
-    private val connectivity = context.getSystemService(ConnectivityManager::class.java)
+    private val connectivity = context.connectivityService()
+    private val wifi = context.wifiService()
     private val publicTethering = if (Build.VERSION.SDK_INT >= 36) PublicTethering(context) else null
     private var lastLegacyDiagnostic: String? = null
 
     fun sample(): HotspotNetworkSnapshot {
-        val ap = publicTethering?.interfaces ?: legacyApInterfaces()
+        val ap = if (Build.VERSION.SDK_INT >= 36) publicTethering?.interfaces ?: legacyApInterfaces()
+            else legacyApInterfaces()
+        if (Build.VERSION.SDK_INT < 23) return legacySample(ap)
         val before = runCatching { connectivity?.activeNetwork }
         val upstreams = runCatching {
             checkNotNull(connectivity)
@@ -35,22 +38,42 @@ internal class ManualHotspotInterfaces(
         val defaultName = runCatching {
             before.getOrNull()?.let { connectivity?.getLinkProperties(it)?.interfaceName }
         }.getOrNull()
-        val interfaces = runCatching {
-            Collections.list(NetworkInterface.getNetworkInterfaces()).mapNotNull { iface ->
-                runCatching {
-                    if (iface.isLoopback) null else HotspotInterfaceSnapshot(
-                        iface.name, iface.index, iface.isUp, Collections.list(iface.inetAddresses),
-                        wirelessInterfaceName(iface.name) || File("/sys/class/net/${iface.name}/wireless").isDirectory,
-                    )
-                }.getOrNull()
-            }
-        }.getOrDefault(emptyList())
+        val interfaces = readInterfaces()
         val after = runCatching { connectivity?.activeNetwork }
         return HotspotNetworkSnapshot(
             interfaces, ap, upstreams, defaultName,
             consistent = before.isSuccess && after.isSuccess && before.getOrNull() == after.getOrNull(),
             apEnabled = CarHotspotStatus.isEnabled(context),
         )
+    }
+
+    private fun legacySample(ap: Set<String>?): HotspotNetworkSnapshot = try {
+        val manager = checkNotNull(connectivity) { "ConnectivityManager is unavailable" }
+        val wifiManager = checkNotNull(wifi) { "WifiManager is unavailable" }
+        val before = readLegacyNetworkState(manager, wifiManager, onDiagnostic)
+        val interfaces = readInterfaces()
+        val after = readLegacyNetworkState(manager, wifiManager, onDiagnostic)
+        legacyNetworkSnapshot(before, after, interfaces, ap, CarHotspotStatus.isEnabled(context))
+    } catch (error: Exception) {
+        onDiagnostic("legacy network sample failed: ${error.javaClass.simpleName}")
+        HotspotNetworkSnapshot(emptyList(), ap, null, null, consistent = false, apEnabled = null)
+    }
+
+    private fun readInterfaces(): List<HotspotInterfaceSnapshot> = try {
+        Collections.list(NetworkInterface.getNetworkInterfaces()).mapNotNull { iface ->
+            try {
+                if (iface.isLoopback) null else HotspotInterfaceSnapshot(
+                    iface.name, iface.index, iface.isUp, Collections.list(iface.inetAddresses),
+                    wirelessInterfaceName(iface.name) || File("/sys/class/net/${iface.name}/wireless").isDirectory,
+                )
+            } catch (error: Exception) {
+                onDiagnostic("interface sample failed iface=${iface.name}: ${error.javaClass.simpleName}")
+                null
+            }
+        }
+    } catch (error: Exception) {
+        onDiagnostic("interface enumeration failed: ${error.javaClass.simpleName}")
+        emptyList()
     }
 
     // 旧平台只使用允许读取的结果；接口归属读不到时保持 unknown，不放宽普通网卡资格。
@@ -71,9 +94,11 @@ internal class ManualHotspotInterfaces(
             onDiagnostic(diagnostic)
         }
         ap
-    }.getOrNull()
+    }.onFailure { onDiagnostic("legacy hotspot ownership unavailable: ${it.javaClass.simpleName}") }.getOrNull()
 
-    override fun close() { publicTethering?.close() }
+    override fun close() {
+        if (Build.VERSION.SDK_INT >= 36) publicTethering?.close()
+    }
 
     @RequiresApi(36)
     private class PublicTethering(context: Context) : Closeable {

@@ -2,6 +2,47 @@
 
 Use the [installation guide](INSTALL.md). With the car parked, verify wired and wireless connection, picture, touch and music. Test disconnect/reconnect, then settings Apply/Cancel. Save a diagnostic report after reproducing an issue.
 
+## Phase 3A API 22 existing-LAN checks
+
+Run from the project root with a supported JDK:
+
+```powershell
+.\gradlew.bat :mobile:assembleDebug
+.\gradlew.bat :shared:testDebugUnitTest --tests 'com.shilapi.xcertplay.network.*' :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.ExistingWifiManagerTest' --tests 'com.shilapi.xcertplay.CarPlayBonjourDualStackTest' --tests 'com.shilapi.xcertplay.CarHotspotSetupTest'
+.\gradlew.bat :shared:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=com.shilapi.xcertplay.network.LegacyNetworkApi22DeviceTest'
+```
+
+Select only an API 22 emulator/device for the last command. The instrumentation suite is API 22-only
+and creates test-only local discovery advertisements; it never initializes authentication,
+Bluetooth, USB or a CarPlay session, and disables Bonjour control probes. It exercises the real
+network sampler/service lookup, manager construction, legacy network callback registration,
+local IPv4/scoped-IPv6 listener round trips, stable injected AP readiness, observable system NSD
+advertisement, and local peer discovery/resolution. It does
+not create a hotspot. A non-Wi-Fi emulator can verify sockets/discovery, but cannot verify
+real Wi-Fi attachment or AP ownership. Robolectric 4.17 does not support API 22; legacy
+selection tests use pure snapshots and runtime checks use instrumentation.
+
+Validation on the API 22 Android 5.1.1 emulator: 188 shared network unit tests, 32 focused
+common-module unit tests, and all 5 network instrumentation tests passed. The debug APK
+installed/launched; `eth0` exposed `10.0.2.15` and scoped link-local IPv6, both served a byte
+round trip on the same port. The emulator's own DNS-SD advertisement was observed and a local
+test peer resolved with no control probes. Full shared-module lint remains blocked by 84
+errors in other surfaces; no `NewApi` error remains in the audited Phase 3A files. No lint
+baseline or broad API suppression was added.
+
+Install/launch the mobile debug APK separately and confirm the launch-only screen remains.
+On a parked Okavango with its hotspot manually enabled, confirm the firmware's AP status and
+interface ownership agree, a stable private IPv4/scoped-IPv6 address is selected, and
+readiness still succeeds without an Internet/default network. Check off/on and IP changes;
+disabled, disappearing or station-only interfaces must not pass Manual Hotspot readiness.
+For Existing Wi-Fi, verify the head unit's already connected station is selected, saved SSID
+mismatches are rejected, and disconnect/address changes invalidate the attachment.
+
+Use another non-iPhone LAN device advertising a test DNS-SD service to verify bidirectional
+multicast and peer resolution. API 22 NSD is platform-scoped and can omit TXT IDs; validate
+the selected address/port and the advertised receiver on the intended LAN, particularly with
+cellular/VPN enabled or concurrent station/AP interfaces. Do not initiate a phone handshake.
+
 ## Custom stream resolution
 
 In the home settings and the in-session menu, confirm the accepted range is **30–160%**. Try 160%, cancel an edit, save an unrelated setting, and reconnect; the exact saved percentage must survive. Enter 161% in the numeric dialog and confirm it stays open with an error. Reset must only change the draft to 100% until Save/Apply is selected.

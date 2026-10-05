@@ -25,9 +25,9 @@ class ExistingWifiManager(
     private val onDiagnostic: (String) -> Unit = {},
     private val onNetworkChanged: () -> Unit = {},
 ) : WirelessHotspotManager {
-    private val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
+    private val connectivity = context.applicationContext.connectivityService()
         ?: throw IllegalStateException("ConnectivityManager is unavailable")
-    private val wifi = context.applicationContext.getSystemService(WifiManager::class.java)
+    private val wifi = context.applicationContext.wifiService()
         ?: throw IllegalStateException("WifiManager is unavailable")
     private val lock = Any()
     private val invalidated = AtomicBoolean()
@@ -115,9 +115,7 @@ class ExistingWifiManager(
                     hosts = addresses
                     interfaceIndex = iface.index
                     interfaceName = name
-                    connectivity.registerNetworkCallback(NetworkRequest.Builder().clearCapabilities()
-                        .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-                        .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build(), callback)
+                    connectivity.registerNetworkCallback(existingWifiNetworkRequest(), callback)
                     callbackRegistered = true
                 }
                 // Close the gap between reading the link and registering the callback.
@@ -182,4 +180,17 @@ class ExistingWifiManager(
             }
         }
     }
+}
+
+internal fun existingWifiNetworkRequest(): NetworkRequest {
+    val builder = NetworkRequest.Builder()
+    if (Build.VERSION.SDK_INT >= 30) {
+        builder.clearCapabilities()
+    } else {
+        builder.removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_TRUSTED)
+            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+    }
+    return builder.addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN).build()
 }
