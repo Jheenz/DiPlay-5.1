@@ -34,6 +34,26 @@ class LegacyNetworkApi22DeviceTest {
     )
     private val identity = AirPlayIdentity(ByteArray(32), ByteArray(32), "phase3a-test-only")
 
+    @Test fun deviceDiagnosticsReportUsesNsdAndClosesWithoutProjection() {
+        val sampled = CountDownLatch(1)
+        val diagnostics = Phase3ADeviceDiagnostics(context) { report ->
+            if (report.contains("Manual readiness:")) sampled.countDown()
+        }
+        try {
+            assertTrue("Device diagnostics sample timed out", sampled.await(8, TimeUnit.SECONDS))
+            val report = diagnostics.diagnosticReport()
+            assertTrue(report.contains("Bonjour/mDNS backend: system_nsd"))
+            assertTrue(report.contains("NSD registration: not started"))
+            assertTrue(report.contains("Multicast lock: not held"))
+            assertTrue(report.contains("no CarPlay advertisement or handshake"))
+            assertFalse(com.shilapi.xcertplay.orchestration.LegacyLaunchBuild.CONNECTIONS_ENABLED)
+            assertFalse(com.shilapi.xcertplay.orchestration.LegacyLaunchBuild.VENDOR_INTEGRATION_ENABLED)
+        } finally {
+            diagnostics.close()
+        }
+        assertTrue(diagnostics.diagnosticReport().contains("Multicast lock: not held"))
+    }
+
     private fun snapshot(): HotspotNetworkSnapshot =
         ManualHotspotInterfaces(context) { Log.i(TAG, it) }.use { reader ->
             var result = reader.sample()

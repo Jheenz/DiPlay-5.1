@@ -51,6 +51,7 @@ import com.shilapi.xcertplay.host.R
 import com.shilapi.xcertplay.network.CarHotspotSettings
 import com.shilapi.xcertplay.network.CarHotspotTethering
 import com.shilapi.xcertplay.network.WifiP2pChannels
+import com.shilapi.xcertplay.network.Phase3ADeviceDiagnostics
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.orchestration.LegacyLaunchBuild
 import com.shilapi.xcertplay.transport.EvChargingConnectors
@@ -80,6 +81,10 @@ class DiPlayActivity : ComponentActivity() {
     private var testToneTrack: AudioTrack? = null
     private var toneStop: Runnable? = null
     private var exportButton: Button? = null
+    private var phase3ADiagnostics: Phase3ADeviceDiagnostics? = null
+    private var phase3AText: TextView? = null
+    private var phase3AReport = "Phase 3A network diagnostics: not sampled"
+    private var phase3AGeneration = 0
     private var rootScroll: ScrollView? = null
     private var renderedPage: String? = null
     private var pendingScrollY: Int? = null
@@ -227,6 +232,17 @@ class DiPlayActivity : ComponentActivity() {
             return
         }
         handler.removeCallbacks(tick); handler.post(tick)
+        if (LegacyLaunchBuild.PHASE3A_DIAGNOSTICS_ENABLED && phase3ADiagnostics == null) {
+            val generation = ++phase3AGeneration
+            phase3ADiagnostics = Phase3ADeviceDiagnostics(applicationContext) { report ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && phase3AGeneration == generation && phase3ADiagnostics != null) {
+                        phase3AReport = report
+                        phase3AText?.text = report
+                    }
+                }
+            }
+        }
         // Back from the car settings: refresh the car hotspot reminder on the home page.
         if (!initialLaunch && !adbSwitchChangePending && !pausedForAdbSwitchChange &&
             (page == "home" || page == "settings" || page == "connection")) render()
@@ -244,6 +260,12 @@ class DiPlayActivity : ComponentActivity() {
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         pausedForAdbSwitchChange = adbSwitchChangePending
         handler.removeCallbacks(tick)
+        phase3AGeneration++
+        phase3ADiagnostics?.let {
+            it.close()
+            phase3AReport = it.diagnosticReport()
+        }
+        phase3ADiagnostics = null
         super.onPause()
     }
 
@@ -273,6 +295,7 @@ class DiPlayActivity : ComponentActivity() {
             resources.configuration.screenHeightDp < 450
 
     private fun render() {
+        phase3AText = null
         // A pending assignment belongs to the widgets being replaced, never to another page.
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         // A restore still waiting for layout keeps its target: the old page was never laid out.
@@ -818,6 +841,19 @@ class DiPlayActivity : ComponentActivity() {
         content.addView(label(getString(R.string.legacy_launch_only_description), 17, MUTED))
         section(content, getString(R.string.connection_setup), R.drawable.ic_dp_connection) { card ->
             card.addView(button(getString(R.string.open_connection_setup), false) { page = "connection"; render() }, matchButton())
+        }
+        if (LegacyLaunchBuild.PHASE3A_DIAGNOSTICS_ENABLED) {
+            section(content, getString(R.string.phase3a_diagnostics), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3a_test_help), 16, MUTED))
+                phase3AText = label(phase3AReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(phase3AText)
+                card.addView(button(getString(R.string.phase3a_refresh), false) {
+                    phase3ADiagnostics?.refresh()
+                }, matchButton())
+                card.addView(button(getString(R.string.phase3a_start), false) {
+                    phase3ADiagnostics?.startNetworkTest()
+                }, matchButton())
+            }
         }
         section(content, getString(R.string.diagnostics), R.drawable.ic_dp_diagnostics) { card ->
             exportButton = button(getString(R.string.save_diagnostic_report), false) { chooseReportDestination() }
@@ -2674,15 +2710,19 @@ class DiPlayActivity : ComponentActivity() {
         exportButton?.apply { isEnabled = false; text = getString(R.string.saving_report) }
         val appContext = applicationContext
         val fileName = reportFileName()
+        val networkDiagnostics = phase3ADiagnostics?.diagnosticReport() ?: phase3AReport
         Thread({
             val result = runCatching {
                 val report = buildString {
                     if (!LegacyLaunchBuild.CONNECTIONS_ENABLED) {
-                        appendLine("DiPlay ${version()} / API 22 install and launch test")
+                        appendLine("DiPlay ${version()} / Phase 3A hardware-validation test")
                         appendLine("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}")
                         appendLine("Head unit: ${Build.MANUFACTURER} ${Build.MODEL}")
                         appendLine("Board: ${Build.BOARD}; hardware: ${Build.HARDWARE}; build: ${Build.DISPLAY}")
                         appendLine("CarPlay, Bluetooth, USB, Wi-Fi Direct, LocalOnlyHotspot and BYD services: disabled")
+                        appendLine("Accessory authentication and vehicle integration: disabled")
+                        appendLine("--- Phase 3A local network diagnostics ---")
+                        appendLine(networkDiagnostics)
                         return@buildString
                     }
                     appendLine("DiPlay ${version()} · private beta diagnostic report")

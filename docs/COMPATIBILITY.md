@@ -19,6 +19,20 @@ This branch supports installation/launch and legacy media initialization on API 
 by `LegacyLaunchBuild`; Bluetooth RFCOMM/iAP2, authentication, USB projection, Wi-Fi Direct and
 LocalOnlyHotspot are not enabled by this phase.
 
+The Okavango has confirmed installation/launch on `alps E01`, `mt6735`, Android 5.1/API 22,
+firmware `SWVX11A0126H5173.00036`. The debug build is now
+`0.2.12-api22-phase3a-device-test`. Settings exposes read-only live interface/address,
+prefix/route, station/AP evidence and stable Manual Hotspot readiness diagnostics.
+**Start Phase 3A network test** performs readiness checks then a 20-second system NSD
+registration/discovery test with `_diplay-phase3a._tcp.`. It does not advertise CarPlay,
+load accessory credentials, accept socket traffic or send any handshake/control probe.
+It retains a multicast lock only during the test and stops on app pause, timeout,
+interface/address change or lost readiness. The diagnostic report includes the same
+network/test data. `DiPlayPhase3ADevice` logs selection, readiness, NSD and failure outcomes.
+On API 22, default connectivity is observable but Internet validation is unknown; no
+external Internet probe is made. Missing firmware SSID/route information is reported,
+not guessed. A self-discovered advertisement alone is not evidence of laptop reachability.
+
 Existing-network managers use API 22-compatible service lookup. Manual hotspot sampling on
 API 22 reads `activeNetworkInfo`, Wi-Fi `NetworkInfo`, `WifiInfo.ipAddress`, API 21
 `Network`/`LinkProperties`, and local interfaces instead of `activeNetwork` (API 23).

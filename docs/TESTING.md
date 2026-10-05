@@ -8,7 +8,7 @@ Run from the project root with a supported JDK:
 
 ```powershell
 .\gradlew.bat :mobile:assembleDebug
-.\gradlew.bat :shared:testDebugUnitTest --tests 'com.shilapi.xcertplay.network.*' :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.ExistingWifiManagerTest' --tests 'com.shilapi.xcertplay.CarPlayBonjourDualStackTest' --tests 'com.shilapi.xcertplay.CarHotspotSetupTest'
+.\gradlew.bat :shared:testDebugUnitTest --tests 'com.shilapi.xcertplay.network.*' --tests 'com.shilapi.xcertplay.orchestration.ManualHotspot*Test' :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.ExistingWifi*Test' --tests 'com.shilapi.xcertplay.CarPlayBonjourDualStackTest' --tests 'com.shilapi.xcertplay.CarHotspotSetupTest' --tests 'com.shilapi.xcertplay.Phase3ADeviceSettingsTest'
 .\gradlew.bat :shared:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=com.shilapi.xcertplay.network.LegacyNetworkApi22DeviceTest'
 ```
 
@@ -30,7 +30,32 @@ test peer resolved with no control probes. Full shared-module lint remains block
 errors in other surfaces; no `NewApi` error remains in the audited Phase 3A files. No lint
 baseline or broad API suppression was added.
 
-Install/launch the mobile debug APK separately and confirm the launch-only screen remains.
+For the hardware-validation changes, the debug build and instrumentation APK compilation
+pass, as do 197 shared and 36 common focused unit tests (including safety gates, address-change
+signatures and Settings controls). The connected instrumentation command was attempted but
+blocked by `No connected devices!`; only an API 37 AVD is installed on this development machine.
+The API 22 class now contains six tests including the new device-diagnostics report/cleanup
+check. These six tests must be rerun on API 22; the earlier five-test emulator result above is
+historical, not validation of this build.
+
+Install/launch the mobile debug APK separately and confirm the visible version is
+`0.2.12-api22-phase3a-device-test` and projection/vehicle controls remain disabled.
+Open **Settings -> Phase 3A network diagnostics**. It samples about every three seconds;
+**Refresh network diagnostics** reruns the sampler and stable readiness check.
+**Start Phase 3A network test** checks readiness before publishing a diagnostic-only
+`_diplay-phase3a._tcp.` service and discovering that same type for 20 seconds. No CarPlay
+advertisement, authentication, handshake or Bluetooth/USB/vehicle work occurs.
+Registration success, service observation, self-observation, resolved peer address/port,
+multicast lock state and test result appear in the screen and exported report.
+To exercise peer resolution, have the laptop advertise `_diplay-phase3a._tcp.` with a
+non-DiPlay name and a known port. Verify the head-unit advertisement separately on the
+laptop; self-observation is not a bidirectional multicast test. API 22 NSD is platform-scoped.
+Pause the app or toggle the hotspot during a test and verify cleanup and visible failure.
+Capture `adb logcat -s DiPlayPhase3ADevice` if ADB is available.
+
+The laptop previously received `192.168.43.157` with gateway `192.168.43.1`. Confirm the
+app's interface list shows which actual interface owns `192.168.43.1`, and compare it to the
+selected interface, local IPv4, prefix, route and AP/station evidence. Do not hardcode it.
 On a parked Okavango with its hotspot manually enabled, confirm the firmware's AP status and
 interface ownership agree, a stable private IPv4/scoped-IPv6 address is selected, and
 readiness still succeeds without an Internet/default network. Check off/on and IP changes;
@@ -38,7 +63,7 @@ disabled, disappearing or station-only interfaces must not pass Manual Hotspot r
 For Existing Wi-Fi, verify the head unit's already connected station is selected, saved SSID
 mismatches are rejected, and disconnect/address changes invalidate the attachment.
 
-Use another non-iPhone LAN device advertising a test DNS-SD service to verify bidirectional
+Use another non-iPhone LAN device advertising the diagnostic DNS-SD service to verify bidirectional
 multicast and peer resolution. API 22 NSD is platform-scoped and can omit TXT IDs; validate
 the selected address/port and the advertised receiver on the intended LAN, particularly with
 cellular/VPN enabled or concurrent station/AP interfaces. Do not initiate a phone handshake.

@@ -1,7 +1,8 @@
 package com.shilapi.xcertplay.orchestration
 
-/** Phase 1 of the Geely API 22 port: Views UI only, until the APK is tested in the car. */
+/** Geely hardware validation: opt-in local diagnostics only, never projection or vehicle work. */
 object LegacyLaunchBuild {
     const val CONNECTIONS_ENABLED = false
     const val VENDOR_INTEGRATION_ENABLED = false
+    const val PHASE3A_DIAGNOSTICS_ENABLED = true
 }

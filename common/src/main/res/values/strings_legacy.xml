@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="legacy_launch_only_status">Android 5.1 launch test</string>
-    <string name="legacy_launch_only_description">CarPlay connections and vehicle integration are disabled in this install and launch test. Hotspot setup will follow after this APK is tested.</string>
+    <string name="legacy_launch_only_status">Android 5.1 Phase 3A device test</string>
+    <string name="legacy_launch_only_description">Phase 3A hardware validation only. CarPlay, authentication, Bluetooth, USB projection, Wi-Fi Direct, LocalOnlyHotspot and vehicle integration remain disabled. Enable the car hotspot manually, then open Settings for network diagnostics.</string>
+    <string name="phase3a_diagnostics">Phase 3A network diagnostics</string>
+    <string name="phase3a_refresh">Refresh network diagnostics</string>
+    <string name="phase3a_start">Start Phase 3A network test</string>
+    <string name="phase3a_test_help">Read-only network sampling refreshes about every 3 seconds. Start checks stable manual-hotspot readiness and runs a 20-second system NSD test only. No CarPlay handshake. Test peers must advertise _diplay-phase3a._tcp.; observing our own advertisement does not prove laptop reachability. API 22 NSD is platform-scoped, not bound to the selected interface. Pausing the app stops the test.</string>
 </resources>
