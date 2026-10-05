@@ -43,7 +43,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".legacytest"
-            versionNameSuffix = "-api22-phase3a-device-test"
+            versionNameSuffix = "-api22-phase3b-device-test"
         }
         release {
             optimization {

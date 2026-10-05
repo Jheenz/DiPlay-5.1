@@ -626,7 +626,7 @@ class CarPlayHostActivity : ComponentActivity() {
     }
 
     private fun hasFineLocationPermission(): Boolean =
-        checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+        Build.VERSION.SDK_INT < 23 || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
 
     private fun requestVpnConsent() {
@@ -660,6 +660,7 @@ class CarPlayHostActivity : ComponentActivity() {
         }
 
     private fun requiredWirelessPermissions(): List<String> = when {
+        Build.VERSION.SDK_INT < 23 -> emptyList()
         wirelessHotspotMode == WirelessHotspotMode.EXISTING_WIFI ->
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) listOf(Manifest.permission.BLUETOOTH_CONNECT) else emptyList()
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> listOf(

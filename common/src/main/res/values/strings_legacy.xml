@@ -1,7 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="legacy_launch_only_status">Android 5.1 Phase 3A device test</string>
-    <string name="legacy_launch_only_description">Phase 3A hardware validation only. CarPlay, authentication, Bluetooth, USB projection, Wi-Fi Direct, LocalOnlyHotspot and vehicle integration remain disabled. Enable the car hotspot manually, then open Settings for network diagnostics.</string>
+    <string name="legacy_launch_only_status">Android 5.1 Phase 3B device test</string>
+    <string name="legacy_launch_only_description">Phase 3A network and Phase 3B Bluetooth hardware validation only. CarPlay, authentication, USB projection, Wi-Fi Direct, LocalOnlyHotspot and vehicle integration remain disabled. Settings provides opt-in RFCOMM and pre-auth iAP2 link tests.</string>
+    <string name="phase3b_diagnostics">Phase 3B Bluetooth diagnostics</string>
+    <string name="phase3b_refresh">Refresh Bluetooth diagnostics</string>
+    <string name="phase3b_scan">Scan for devices</string>
+    <string name="phase3b_test">Test RFCOMM connection</string>
+    <string name="phase3b_test_help">Enable Bluetooth and pair the iPhone in car settings first. Scan runs for at most 15 seconds; iPhones may be discoverable only while Bluetooth settings is open. Test asks you to select a bonded device, uses the existing iAP2 service UUID with a 12-second connect limit, then exercises link framing for at most 10 seconds. It stops at the first control message without identification or authentication responses. No CarPlay, media or hotspot transition. Pausing the app closes the socket. Names, MACs and cached service UUIDs are included in the diagnostic report.</string>
+    <string name="phase3b_select_candidate">Select bonded iPhone candidate</string>
+    <string name="phase3b_pair_first">Enable Bluetooth, pair the iPhone in car settings, then refresh diagnostics and retry.</string>
+    <string name="phase3b_permission_denied">Bluetooth diagnostic permission denied. Grant the requested permission in app settings and retry.</string>
     <string name="phase3a_diagnostics">Phase 3A network diagnostics</string>
     <string name="phase3a_refresh">Refresh network diagnostics</string>
     <string name="phase3a_start">Start Phase 3A network test</string>

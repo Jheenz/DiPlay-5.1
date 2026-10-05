@@ -6,7 +6,6 @@ import android.Manifest
 import android.app.AlertDialog
 import android.app.Dialog
 import android.view.Window
-import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -55,6 +54,8 @@ import com.shilapi.xcertplay.network.Phase3ADeviceDiagnostics
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.orchestration.LegacyLaunchBuild
 import com.shilapi.xcertplay.transport.EvChargingConnectors
+import com.shilapi.xcertplay.transport.BluetoothCompatibility
+import com.shilapi.xcertplay.transport.Phase3BDeviceDiagnostics
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -85,6 +86,23 @@ class DiPlayActivity : ComponentActivity() {
     private var phase3AText: TextView? = null
     private var phase3AReport = "Phase 3A network diagnostics: not sampled"
     private var phase3AGeneration = 0
+    private var phase3BDiagnostics: Phase3BDeviceDiagnostics? = null
+    private var phase3BText: TextView? = null
+    private var phase3BReport = "Phase 3B Bluetooth diagnostics: not sampled"
+    private var phase3BGeneration = 0
+    private var phase3BPendingAction = "refresh"
+    private var phase3BGrantedAction: String? = null
+    private val phase3BPermissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) {
+            phase3BGrantedAction = phase3BPendingAction
+            consumePhase3BGrantedAction()
+        }
+        else {
+            Log.w(Phase3BDeviceDiagnostics.TAG, "Bluetooth diagnostic permission denied")
+            toast(getString(R.string.phase3b_permission_denied))
+            phase3BDiagnostics?.refresh()
+        }
+    }
     private var rootScroll: ScrollView? = null
     private var renderedPage: String? = null
     private var pendingScrollY: Int? = null
@@ -232,6 +250,18 @@ class DiPlayActivity : ComponentActivity() {
             return
         }
         handler.removeCallbacks(tick); handler.post(tick)
+        if (LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED && phase3BDiagnostics == null) {
+            val generation = ++phase3BGeneration
+            phase3BDiagnostics = Phase3BDeviceDiagnostics(applicationContext) { report ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && generation == phase3BGeneration && phase3BDiagnostics != null) {
+                        phase3BReport = report
+                        phase3BText?.text = report
+                    }
+                }
+            }
+        }
+        consumePhase3BGrantedAction()
         if (LegacyLaunchBuild.PHASE3A_DIAGNOSTICS_ENABLED && phase3ADiagnostics == null) {
             val generation = ++phase3AGeneration
             phase3ADiagnostics = Phase3ADeviceDiagnostics(applicationContext) { report ->
@@ -260,6 +290,9 @@ class DiPlayActivity : ComponentActivity() {
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         pausedForAdbSwitchChange = adbSwitchChangePending
         handler.removeCallbacks(tick)
+        phase3BGeneration++
+        phase3BDiagnostics?.let { it.close(); phase3BReport = it.diagnosticReport() }
+        phase3BDiagnostics = null
         phase3AGeneration++
         phase3ADiagnostics?.let {
             it.close()
@@ -296,6 +329,7 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun render() {
         phase3AText = null
+        phase3BText = null
         // A pending assignment belongs to the widgets being replaced, never to another page.
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         // A restore still waiting for layout keeps its target: the old page was never laid out.
@@ -855,6 +889,19 @@ class DiPlayActivity : ComponentActivity() {
                 }, matchButton())
             }
         }
+        if (LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED) {
+            section(content, getString(R.string.phase3b_diagnostics), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b_test_help), 16, MUTED))
+                phase3BText = label(phase3BReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(phase3BText)
+                card.addView(button(getString(R.string.phase3b_refresh), false) { requestPhase3BAction("refresh") }, matchButton())
+                card.addView(button(getString(R.string.phase3b_scan), false) { requestPhase3BAction("scan") }, matchButton())
+                card.addView(button(getString(R.string.phase3b_test), false) { requestPhase3BAction("test") }, matchButton())
+                card.addView(button(getString(R.string.bluetooth_settings), false) {
+                    openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                }, matchButton())
+            }
+        }
         section(content, getString(R.string.diagnostics), R.drawable.ic_dp_diagnostics) { card ->
             exportButton = button(getString(R.string.save_diagnostic_report), false) { chooseReportDestination() }
                 .apply { isEnabled = !exportInProgress }
@@ -874,6 +921,47 @@ class DiPlayActivity : ComponentActivity() {
         }
         section(content, getString(R.string.made_possible_by_open_source)) { card ->
             card.addView(label(getString(R.string.receiver_based_on_xcertplay_licensed_under_gpl_3_0_diplay), 16, MUTED))
+        }
+    }
+
+    private fun requestPhase3BAction(action: String) {
+        if (!LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED) return
+        val missing = BluetoothCompatibility.missingPermissions(this, scan = action == "scan")
+        if (missing.isNotEmpty()) {
+            phase3BPendingAction = action
+            phase3BPermissions.launch(missing.toTypedArray())
+        } else runPhase3BAction(action)
+    }
+
+    private fun consumePhase3BGrantedAction() {
+        if (phase3BDiagnostics == null) return
+        phase3BGrantedAction?.let { action ->
+            phase3BGrantedAction = null
+            runPhase3BAction(action)
+        }
+    }
+
+    private fun runPhase3BAction(action: String) {
+        val diagnostics = phase3BDiagnostics ?: return
+        when (action) {
+            "refresh" -> diagnostics.refresh()
+            "scan" -> diagnostics.scan()
+            "test" -> diagnostics.refresh {
+                runOnUiThread {
+                    if (phase3BDiagnostics !== diagnostics || isFinishing || isDestroyed) return@runOnUiThread
+                    val candidates = diagnostics.candidates()
+                    if (candidates.isEmpty()) {
+                        toast(getString(R.string.phase3b_pair_first))
+                        return@runOnUiThread
+                    }
+                    AlertDialog.Builder(this).setTitle(getString(R.string.phase3b_select_candidate))
+                        .setItems(candidates.map { it.description() }.toTypedArray()) { _, index ->
+                            diagnostics.select(candidates[index].address)
+                            diagnostics.testRfcomm()
+                        }
+                        .setNegativeButton(getString(R.string.cancel), null).show()
+                }
+            }
         }
     }
 
@@ -2570,14 +2658,18 @@ class DiPlayActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             bluetoothPermission.launch(Manifest.permission.BLUETOOTH_CONNECT); return
         }
-        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        val adapter = BluetoothCompatibility.adapter(this)
         if (adapter == null || !adapter.isEnabled) {
             AlertDialog.Builder(this).setTitle(getString(R.string.turn_on_bluetooth))
                 .setMessage(getString(R.string.enable_the_car_s_bluetooth_and_pair_your_iphone_first))
                 .setPositiveButton(getString(R.string.open_bluetooth)) { _, _ -> openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
                 .setNegativeButton(getString(R.string.later), null).show(); return
         }
-        val devices = runCatching { adapter.bondedDevices.sortedBy { it.name ?: "" } }.getOrDefault(emptyList())
+        val devices = try { adapter.bondedDevices.sortedBy { it.name ?: "" } } catch (error: SecurityException) {
+            Log.w("DiPlayBluetooth", "Bonded device enumeration failed", error)
+            toast(error.message ?: getString(R.string.phase3b_permission_denied))
+            return
+        }
         if (devices.isEmpty()) {
             AlertDialog.Builder(this).setTitle(getString(R.string.pair_your_iphone))
                 .setMessage(getString(R.string.on_your_iphone_open_settings_bluetooth_and_pair_with_the_c))
@@ -2711,18 +2803,22 @@ class DiPlayActivity : ComponentActivity() {
         val appContext = applicationContext
         val fileName = reportFileName()
         val networkDiagnostics = phase3ADiagnostics?.diagnosticReport() ?: phase3AReport
+        val bluetoothDiagnostics = phase3BDiagnostics?.diagnosticReport() ?: phase3BReport
         Thread({
             val result = runCatching {
                 val report = buildString {
                     if (!LegacyLaunchBuild.CONNECTIONS_ENABLED) {
-                        appendLine("DiPlay ${version()} / Phase 3A hardware-validation test")
+                        appendLine("DiPlay ${version()} / Phase 3B hardware-validation test")
                         appendLine("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}")
                         appendLine("Head unit: ${Build.MANUFACTURER} ${Build.MODEL}")
                         appendLine("Board: ${Build.BOARD}; hardware: ${Build.HARDWARE}; build: ${Build.DISPLAY}")
-                        appendLine("CarPlay, Bluetooth, USB, Wi-Fi Direct, LocalOnlyHotspot and BYD services: disabled")
+                        appendLine("CarPlay, USB projection, Wi-Fi Direct, LocalOnlyHotspot and BYD services: disabled")
+                        appendLine("Bluetooth: opt-in diagnostic RFCOMM/iAP2 link framing only")
                         appendLine("Accessory authentication and vehicle integration: disabled")
                         appendLine("--- Phase 3A local network diagnostics ---")
                         appendLine(networkDiagnostics)
+                        appendLine("--- Phase 3B Bluetooth diagnostics ---")
+                        appendLine(bluetoothDiagnostics)
                         return@buildString
                     }
                     appendLine("DiPlay ${version()} · private beta diagnostic report")

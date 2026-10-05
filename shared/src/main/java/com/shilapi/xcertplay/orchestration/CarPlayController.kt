@@ -5,7 +5,6 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothA2dp
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothHeadset
-import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothSocket
 import android.content.ComponentName
@@ -59,6 +58,7 @@ import com.shilapi.xcertplay.network.WirelessStartupFailure
 import com.shilapi.xcertplay.network.WirelessStartupDiagnostics
 import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.BluetoothRfcommDuplexStream
+import com.shilapi.xcertplay.transport.BluetoothCompatibility
 import com.shilapi.xcertplay.transport.Ch341DeviceMatcher
 import com.shilapi.xcertplay.transport.Ch341I2cTransport
 import com.shilapi.xcertplay.transport.Ch341UsbHost
@@ -179,7 +179,7 @@ class CarPlayController(
     private val diagnosticRun = AtomicInteger()
     private val usbManager = context.getSystemService(UsbManager::class.java)
     private val bluetoothAdapter =
-        appContext.getSystemService(BluetoothManager::class.java)?.adapter
+        BluetoothCompatibility.adapter(appContext)
     private val iphoneHost = IphoneUsbHost(
         appContext,
         usbManager,
@@ -1247,11 +1247,11 @@ class CarPlayController(
             onStatus(CarPlayStatus.ConnectingBluetooth)
             debugLog(
                 "wireless RFCOMM connecting address=${device.address} " +
-                    "uuid=$IAP2_IPHONE_UUID",
+                    "uuid=${BluetoothCompatibility.IAP2_SERVICE_UUID}",
             )
             val socket = synchronized(wirelessResourceLock) {
                 if (isStaleWirelessRun(generation)) return
-                device.createRfcommSocketToServiceRecord(UUID.fromString(IAP2_IPHONE_UUID))
+                device.createRfcommSocketToServiceRecord(BluetoothCompatibility.IAP2_SERVICE_UUID)
                     .also { bluetoothSocket = it }
             }
             logBluetoothConnectionSnapshot(device, "before-connect")
@@ -2213,7 +2213,7 @@ class CarPlayController(
                 return
             }
             val uuids = device.uuids
-            val service = UUID.fromString(IAP2_IPHONE_UUID)
+            val service = BluetoothCompatibility.IAP2_SERVICE_UUID
             connectionDiagnostic(
                 "Bluetooth snapshot point=$point enabled=${bluetoothAdapter?.isEnabled} " +
                     "bondState=${device.bondState} cachedServiceCount=${uuids?.size ?: "unknown"} " +
@@ -2577,7 +2577,6 @@ class CarPlayController(
     companion object {
         const val CONNECTION_DIAGNOSTIC_PREFIX = "CONNECTION_DIAGNOSTIC"
         private val diagnosticAttempts = AtomicInteger()
-        private const val IAP2_IPHONE_UUID = "00000000-deca-fade-deca-deafdecacafe"
         private const val HOTSPOT_START_TIMEOUT_MILLIS = 60_000L
         private const val WIFI_P2P_START_TIMEOUT_MILLIS = 20_000L
         private const val PAIR_TIMEOUT_MILLIS = 5 * 60_000L

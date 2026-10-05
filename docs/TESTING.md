@@ -39,7 +39,7 @@ check. These six tests must be rerun on API 22; the earlier five-test emulator r
 historical, not validation of this build.
 
 Install/launch the mobile debug APK separately and confirm the visible version is
-`0.2.12-api22-phase3a-device-test` and projection/vehicle controls remain disabled.
+`0.2.12-api22-phase3b-device-test` and projection/vehicle controls remain disabled.
 Open **Settings -> Phase 3A network diagnostics**. It samples about every three seconds;
 **Refresh network diagnostics** reruns the sampler and stable readiness check.
 **Start Phase 3A network test** checks readiness before publishing a diagnostic-only
@@ -67,6 +67,60 @@ Use another non-iPhone LAN device advertising the diagnostic DNS-SD service to v
 multicast and peer resolution. API 22 NSD is platform-scoped and can omit TXT IDs; validate
 the selected address/port and the advertised receiver on the intended LAN, particularly with
 cellular/VPN enabled or concurrent station/AP interfaces. Do not initiate a phone handshake.
+
+## Phase 3B API 22 Bluetooth / pre-auth iAP2 checks
+
+Phase 3A is hardware-confirmed on the Okavango: `ap0`, `192.168.43.1/24`, stable manual
+readiness and cross-device NSD/mDNS all pass. The Phase 3B build retains those diagnostics.
+
+```powershell
+.\gradlew.bat :mobile:assembleDebug
+.\gradlew.bat :shared:testDebugUnitTest --tests 'com.shilapi.xcertplay.transport.BluetoothCompatibilityTest' --tests 'com.shilapi.xcertplay.transport.Iap2*Test' --tests 'com.shilapi.xcertplay.iap2.*' --tests 'com.shilapi.xcertplay.network.*' --tests 'com.shilapi.xcertplay.orchestration.ManualHotspot*Test' --tests 'com.shilapi.xcertplay.media.Legacy*Test' --tests 'com.shilapi.xcertplay.media.MediaCodec*Test' :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.Phase3*Test' --tests 'com.shilapi.xcertplay.ExistingWifi*Test' --tests 'com.shilapi.xcertplay.CarPlayBonjourDualStackTest' --tests 'com.shilapi.xcertplay.CarHotspotSetupTest'
+.\gradlew.bat :shared:connectedDebugAndroidTest '-Pandroid.testInstrumentationRunnerArguments.class=com.shilapi.xcertplay.transport.LegacyBluetoothApi22DeviceTest,com.shilapi.xcertplay.network.LegacyNetworkApi22DeviceTest,com.shilapi.xcertplay.media.LegacyMediaApi22DeviceTest'
+```
+
+Use only an API 22 target for instrumentation. The Bluetooth test does read-only service lookup,
+permission-policy and report/cleanup checks; it does not scan or connect without operator action.
+Robolectric uses supported API 23+ environments, while pure permission-policy tests cover API 22.
+Do not treat mocked RFCOMM or framing tests as real radio validation.
+
+Development validation: `:mobile:assembleDebug` and instrumentation APK compilation passed.
+The focused selection passed 271 shared tests and 43 common tests with no failures/skips.
+Coverage includes API 22 permission policy, API 28 adapter/bonded/scan lifecycle, API 31
+permission denial, RFCOMM stream I/O, mocked hardware-mode connection success/failure,
+pre-auth identification/authentication boundaries and Phase 1/2/3A regressions.
+Connected API 22 instrumentation was attempted but blocked by `No connected devices!`;
+API 22 Bluetooth runtime and real RFCOMM radio behavior remain hardware checks.
+
+On the parked Okavango:
+
+1. Install the debug APK and confirm `0.2.12-api22-phase3b-device-test`.
+2. Enable Bluetooth using the car settings. On the iPhone, open **Settings -> Bluetooth**
+   and pair with the car using its normal pairing UI. Do not initiate CarPlay.
+3. Open **DiPlay Settings -> Phase 3B Bluetooth diagnostics -> Refresh Bluetooth diagnostics**.
+   Confirm adapter presence/enabled state and the correct bonded iPhone name/MAC.
+   Local MAC may be a placeholder; cached UUIDs can be unknown without indicating failure.
+4. Optionally tap **Scan for devices** while iPhone Bluetooth settings remains open.
+   Scan is bounded to 15 seconds. Check discovered names/MACs; no automatic pairing occurs.
+   On API 22 no runtime CONNECT/SCAN prompt is expected. API 23-30 scan requests location;
+   API 31+ scan requests CONNECT/SCAN while RFCOMM needs CONNECT only.
+5. Tap **Test RFCOMM connection** and explicitly select the bonded iPhone.
+   Confirm secure RFCOMM uses `00000000-deca-fade-deca-deafdecacafe`. Connect is limited to
+   12 seconds. A successful connection runs pre-auth framing for at most 10 seconds
+   (a 10.5-second socket-close watchdog also unblocks stalled I/O).
+6. Record RFCOMM result, sent/received bytes, link state and first control-message ID.
+   `linkReady=true` proves synchronization, not authentication. Sending a marker with no
+   response proves only a write. The test stops at `0x1d00` without `0x1d01`, or an auth
+   request such as `0xaa00`/`0xaa02` without certificate/challenge responses.
+7. Pause the app during a scan/connect/probe and confirm cleanup. A completed test has
+   **Socket connected: no**, while retaining its result and byte counters.
+8. Save the diagnostic report; capture `adb logcat -s DiPlayPhase3BDevice` where available.
+   Reports deliberately contain Bluetooth names/MACs; review before sharing publicly.
+
+If RFCOMM fails, record the exact SDP/connect/timeout reason and cached service UUIDs.
+No hidden channel-number or insecure fallback is attempted. The next milestone is real
+RFCOMM plus pre-auth framing success. Only after that evidence and explicit approval should
+identification/authentication or Phase 3C be considered.
 
 ## Custom stream resolution
 

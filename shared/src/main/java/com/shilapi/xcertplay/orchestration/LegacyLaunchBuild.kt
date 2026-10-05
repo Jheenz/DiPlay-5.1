@@ -5,4 +5,5 @@ object LegacyLaunchBuild {
     const val CONNECTIONS_ENABLED = false
     const val VENDOR_INTEGRATION_ENABLED = false
     const val PHASE3A_DIAGNOSTICS_ENABLED = true
+    const val PHASE3B_DIAGNOSTICS_ENABLED = true
 }

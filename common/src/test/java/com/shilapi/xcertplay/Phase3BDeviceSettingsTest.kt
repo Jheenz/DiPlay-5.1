@@ -15,23 +15,21 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en", manifest = Config.NONE)
-class Phase3ADeviceSettingsTest {
-    @Test fun settingsShowDedicatedDiagnosticsAndSafeActionsWithoutConnectionControls() {
+class Phase3BDeviceSettingsTest {
+    @Test fun exposesBluetoothDiagnosticButtonsAndKeepsProjectionGated() {
         val activity = Robolectric.buildActivity(DiPlayActivity::class.java).get()
         activity.setTheme(android.R.style.Theme_Material_NoActionBar)
-        val sample = "Local IPv4: 192.168.43.1\nManual readiness: FAIL apEnabled=false"
-        DiPlayActivity::class.java.getDeclaredField("phase3AReport").apply { isAccessible = true }
-            .set(activity, sample)
+        val sample = "RFCOMM result: PASS\nBytes sent=6; received=6"
+        DiPlayActivity::class.java.getDeclaredField("phase3BReport").apply { isAccessible = true }.set(activity, sample)
         val parent = LinearLayout(activity)
         DiPlayActivity::class.java.getDeclaredMethod("launchTestSettings", LinearLayout::class.java)
             .apply { isAccessible = true }.invoke(activity, parent)
         val views = descendants(parent).toList()
-        assertTrue(views.filterIsInstance<TextView>().any { it.text.toString() == sample })
         val buttons = views.filterIsInstance<Button>().map { it.text.toString() }
-        assertTrue(buttons.contains("Refresh network diagnostics"))
-        assertTrue(buttons.contains("Start Phase 3A network test"))
-        assertTrue(buttons.contains("Save diagnostic report"))
-        assertFalse(buttons.any { it == "Connect" || it.contains("USB") })
+        assertTrue(buttons.containsAll(listOf("Refresh Bluetooth diagnostics", "Scan for devices", "Test RFCOMM connection")))
+        assertTrue(views.filterIsInstance<TextView>().any { it.text.toString() == sample })
+        assertFalse(buttons.contains("Connect"))
+        assertTrue(LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED)
         assertFalse(LegacyLaunchBuild.CONNECTIONS_ENABLED)
         assertFalse(LegacyLaunchBuild.VENDOR_INTEGRATION_ENABLED)
     }
