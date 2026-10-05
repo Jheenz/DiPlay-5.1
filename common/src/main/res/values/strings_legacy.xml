@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="legacy_launch_only_status">Android 5.1 launch test</string>
+    <string name="legacy_launch_only_description">CarPlay connections and vehicle integration are disabled in this install and launch test. Hotspot setup will follow after this APK is tested.</string>
+</resources>
