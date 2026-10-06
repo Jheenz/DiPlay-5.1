@@ -31,7 +31,9 @@ class Phase3ADeviceSettingsTest {
         assertTrue(buttons.contains("Refresh network diagnostics"))
         assertTrue(buttons.contains("Start Phase 3A network test"))
         assertTrue(buttons.contains("Save diagnostic report"))
-        assertFalse(buttons.any { it == "Connect" || it.contains("USB") })
+        val collectionOnly = "Collect and export Apple/USB stack files"
+        assertTrue(buttons.contains(collectionOnly))
+        assertFalse(buttons.any { it == "Connect" || (it.contains("USB") && it != collectionOnly) })
         assertFalse(LegacyLaunchBuild.CONNECTIONS_ENABLED)
         assertFalse(LegacyLaunchBuild.VENDOR_INTEGRATION_ENABLED)
     }

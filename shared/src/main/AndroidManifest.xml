@@ -28,6 +28,13 @@
         android:required="false" />
 
     <queries>
+        <package android:name="com.neusoft.appleservice" />
+        <intent>
+            <action android:name="com.neusoft.shockwave.setting.btphonelogic.service.BluetoothControlService" />
+        </intent>
+        <package android:name="com.nforetek.bt" />
+        <package android:name="com.neusoft.geely.btphone" />
+        <package android:name="com.neusoft.geely.btphone.nf" />
         <package android:name="com.byd.carsettings" />
         <package android:name="com.byd.appmgr" />
         <package android:name="com.byd.deviceinfo" />

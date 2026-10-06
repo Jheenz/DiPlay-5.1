@@ -21,19 +21,26 @@ data class Phase3BBluetoothDevice(val name: String?, val address: String, val bo
     fun description(): String = "${name ?: "name unavailable"} ($address) bonded=$bonded UUIDs=${uuids.ifEmpty { listOf("unknown (cached SDP only)") }}"
 }
 
-/** Opt-in secure RFCOMM and link framing only; no controller or authentication dependency. */
+/** Inert until an explicit action; no controller or authentication dependency. */
 class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) -> Unit) : Closeable {
     private val app = context.applicationContext
     private val worker = Executors.newSingleThreadScheduledExecutor()
     private val timer = Executors.newSingleThreadScheduledExecutor()
     private val socket = AtomicReference<BluetoothSocket?>()
     private val busy = AtomicBoolean()
+    private var socketConnected = false
     private val sent = AtomicLong()
     private val received = AtomicLong()
     private val bonded = linkedMapOf<String, Phase3BBluetoothDevice>()
     private val discovered = linkedMapOf<String, Phase3BBluetoothDevice>()
     private var selected: Phase3BBluetoothDevice? = null
     private var adapterReport = "Adapter: not sampled"
+    private var serviceReport = "not sampled"
+    private var adapterPresent: Boolean? = null
+    private var androidEnabled: Boolean? = null
+    private var localNameReport = "not sampled"
+    private var localAddressReport = "not sampled"
+    private var bondedVisible = false
     private var scanReport = "not started"
     private var connectReport = "not started"
     private var framingReport = "not started"
@@ -47,10 +54,13 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (closed) return
-            worker.execute {
-                try {
+            submit("Bluetooth broadcast") {
+                safely("Bluetooth broadcast", onFailure = { error ->
+                    stopScan()
+                    scanReport = "FAIL ${error.javaClass.simpleName}: ${error.message}"
+                }) {
                     synchronized(this@Phase3BDeviceDiagnostics) {
+                        if (!receiverRegistered || !scanOwned) return@synchronized
                         when (intent.action) {
                             BluetoothDevice.ACTION_FOUND -> if (scanOwned) {
                                 @Suppress("DEPRECATION")
@@ -67,32 +77,35 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
                                 if (scanOwned) {
                                     scanOwned = false
                                     scanReport = "finished; discovered=${discovered.size}"
+                                    unregisterScanReceiver()
                                 }
                                 log("scan lifecycle finished")
                             }
-                            BluetoothAdapter.ACTION_STATE_CHANGED -> refreshAdapter()
                         }
                         publish()
                     }
-                } catch (error: RuntimeException) { recordFailure("Bluetooth broadcast", error) }
+                }
             }
         }
     }
 
-    init {
-        try {
-            val filter = IntentFilter().apply {
-                addAction(BluetoothDevice.ACTION_FOUND)
-                addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
-                addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
-                addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
-            }
-            // Bluetooth broadcasts originate in a privileged process distinct from system UID.
-            if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-            else app.registerReceiver(receiver, filter)
-            receiverRegistered = true
-        } catch (error: RuntimeException) { recordFailure("Bluetooth receiver registration", error) }
-        worker.scheduleWithFixedDelay({ refreshSafely() }, 0, 2, TimeUnit.SECONDS)
+    private fun registerScanReceiver() {
+        check(!receiverRegistered) { "Scan receiver already registered" }
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+        }
+        // Bluetooth broadcasts originate in a privileged process distinct from system UID.
+        if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        else app.registerReceiver(receiver, filter)
+        receiverRegistered = true
+    }
+
+    private fun unregisterScanReceiver() {
+        if (!receiverRegistered) return
+        receiverRegistered = false
+        safely("Scan receiver cleanup") { app.unregisterReceiver(receiver) }
     }
 
     fun diagnosticReport(): String = report
@@ -114,7 +127,7 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
     }
 
     fun refresh(onComplete: () -> Unit = {}) {
-        if (!closed) worker.execute {
+        submit("Adapter refresh") {
             refreshSafely()
             if (!closed) onComplete()
         }
@@ -122,40 +135,64 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
 
     private fun refreshSafely() {
         if (closed) return
-        try {
+        safely("Adapter refresh", onFailure = { error ->
+            updateAdapterReport()
+            adapterReport += "\nAdapter sample FAIL ${error.javaClass.simpleName}: ${error.message}"
+            bonded.clear()
+            bondedVisible = false
+            selected = null
+        }) {
             synchronized(this) { refreshAdapter(); publish() }
-        } catch (error: RuntimeException) {
-            synchronized(this) {
-                adapterReport = "Adapter sample FAIL ${error.javaClass.simpleName}: ${error.message}"
-                bonded.clear()
-                selected = null
-            }
-            recordFailure("Adapter refresh", error)
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun refreshAdapter() {
         val previous = adapterReport
-        val adapter = BluetoothCompatibility.adapter(app)
+        adapterPresent = null
+        androidEnabled = null
+        localNameReport = "unknown (not read)"
+        localAddressReport = "unknown (not read)"
+        bondedVisible = false
+        serviceReport = "unknown (lookup not completed)"
+        val manager = BluetoothCompatibility.manager(app)
+        serviceReport = if (manager == null) "no (no Android BluetoothManager service)" else "yes"
+        log("Android Bluetooth service available: $serviceReport")
+        val adapter = manager?.adapter
+        adapterPresent = adapter != null
         val missing = BluetoothCompatibility.missingPermissions(app, scan = false)
         if (adapter == null) {
-            adapterReport = "Bluetooth adapter present: no\nAdapter enabled: unavailable"
+            localNameReport = "unavailable (no Android adapter)"
+            localAddressReport = "unavailable (no Android adapter)"
             bonded.clear()
             selected = null
+            log("Adapter lookup FAIL Android Bluetooth adapter absent; vehicle Bluetooth state unknown")
         } else if (missing.isNotEmpty()) {
-            adapterReport = "Bluetooth adapter present: yes\nAdapter enabled/name/address/bonded devices: unavailable; permission required=$missing"
+            localNameReport = "unavailable; permission required=$missing"
+            localAddressReport = "unavailable; permission required=$missing"
             bonded.clear()
             selected = null
+            log("Adapter refresh FAIL permission required=$missing")
         } else {
-            val value = "Bluetooth adapter present: yes\nAdapter enabled: ${if (adapter.isEnabled) "yes" else "no"}\n" +
-                "Local adapter name: ${adapter.name ?: "unavailable"}\nLocal adapter address: ${adapter.address ?: "unavailable"} (may be Android placeholder)"
-            adapterReport = value
+            androidEnabled = adapter.isEnabled
+            localNameReport = adapter.name ?: "unavailable (Android returned null)"
+            localAddressReport = "${adapter.address ?: "unavailable (Android returned null)"} (may be Android placeholder)"
             bonded.clear()
-            adapter.bondedDevices.orEmpty().sortedBy { it.address }.forEach { bonded[it.address] = describe(it) }
+            val devices = checkNotNull(adapter.bondedDevices) { "Android returned null for bonded devices" }
+            devices.sortedBy { it.address }.forEach { bonded[it.address] = describe(it) }
+            bondedVisible = true
             selected = selected?.let { bonded[it.address] }
         }
+        updateAdapterReport()
         if (adapterReport != previous) log("adapter state $adapterReport")
+    }
+
+    private fun updateAdapterReport() {
+        adapterReport = buildString {
+            appendLine("Android Bluetooth adapter present: ${adapterPresent?.let { if (it) "yes" else "no" } ?: "unknown (lookup failed)"}")
+            appendLine("Android adapter enabled: ${androidEnabled?.let { if (it) "yes" else "no" } ?: "unknown/unavailable (not successfully read)"}")
+            appendLine("Android adapter local name: $localNameReport")
+            append("Android adapter address: $localAddressReport")
+        }
     }
 
     private fun describe(device: BluetoothDevice) = Phase3BBluetoothDevice(
@@ -169,18 +206,21 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
             recordFailure("Scan", IllegalStateException("RFCOMM test is running; scan not started"))
             return
         }
-        worker.execute {
-            try {
+        submit("Scan") {
+            safely("Scan", onFailure = { error ->
+                stopScan()
+                scanReport = "FAIL ${error.javaClass.simpleName}: ${error.message}"
+            }) {
                 synchronized(this) {
                     check(!busy.get()) { "RFCOMM test is running" }
-                    check(receiverRegistered) { "Bluetooth receiver unavailable; scan results cannot be observed" }
                     check(BluetoothCompatibility.missingPermissions(app, scan = true).isEmpty()) { "Scan permission missing" }
                     val adapter = checkNotNull(BluetoothCompatibility.adapter(app)) { "Bluetooth adapter absent" }
                     check(adapter.isEnabled) { "Bluetooth adapter disabled; enable in car settings" }
                     check(!adapter.isDiscovering) { "Discovery already running; wait for it to finish" }
                     discovered.clear()
-                    check(adapter.startDiscovery()) { "startDiscovery returned false; firmware may not support discovery" }
+                    registerScanReceiver()
                     scanOwned = true
+                    check(adapter.startDiscovery()) { "startDiscovery returned false; firmware may not support discovery" }
                     val generation = ++scanGeneration
                     scanReport = "requested (bounded to 15 seconds)"
                     log("scan lifecycle requested")
@@ -196,9 +236,6 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
                         }
                     }, 15, TimeUnit.SECONDS)
                 }
-            } catch (error: RuntimeException) {
-                synchronized(this) { scanReport = "FAIL ${error.message}" }
-                recordFailure("Scan", error)
             }
         }
     }
@@ -209,7 +246,7 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
             recordFailure("RFCOMM test", IllegalStateException("Test already running; duplicate request ignored"))
             return
         }
-        worker.execute {
+        submit("RFCOMM test") {
             var stream: BluetoothRfcommDuplexStream? = null
             val timedOut = AtomicBoolean()
             try {
@@ -238,6 +275,7 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
                 socket.set(connection)
                 if (closed) throw IOException("Screen paused before connect")
                 synchronized(this) {
+                    socketConnected = false
                     connectReport = "connecting ${candidate.address}; secure RFCOMM UUID=${BluetoothCompatibility.IAP2_SERVICE_UUID}"
                     log("RFCOMM connect $connectReport")
                     publish()
@@ -253,6 +291,7 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
                 stream = BluetoothRfcommDuplexStream(connection)
                 val activeStream = stream
                 synchronized(this) {
+                    socketConnected = true
                     connectReport = "PASS secure RFCOMM connected"
                     log("RFCOMM connected UUID=${BluetoothCompatibility.IAP2_SERVICE_UUID}")
                     publish()
@@ -293,11 +332,17 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
                     disconnect = if (timedOut.get()) "FAIL RFCOMM connect timeout (12s)" else "FAIL ${error.javaClass.simpleName}: ${error.message}"
                     log("RFCOMM disconnect $disconnect")
                 }
+            } catch (error: LinkageError) {
+                synchronized(this) {
+                    connectReport = "FAIL ${error.javaClass.simpleName}: ${error.message}"
+                    disconnect = connectReport
+                    recordFailure("RFCOMM vendor API", error)
+                }
             } finally {
-                try { stream?.close() } catch (error: IOException) { recordFailure("RFCOMM stream cleanup", error) }
+                safely("RFCOMM stream cleanup") { stream?.close() }
                 socket.getAndSet(null)?.let(::closeSocket)
                 busy.set(false)
-                synchronized(this) { logCounts(); publish() }
+                synchronized(this) { socketConnected = false; logCounts(); publish() }
             }
         }
     }
@@ -305,22 +350,41 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
     private fun logCounts() { log("byte counts sent=${sent.get()} received=${received.get()}") }
 
     private fun stopScan() {
-        if (!scanOwned) return
+        val wasOwned = scanOwned
         scanOwned = false
         scanGeneration++
         try {
-            val adapter = BluetoothCompatibility.adapter(app)
-            if (adapter?.isDiscovering == true && !adapter.cancelDiscovery()) log("scan cleanup FAIL cancelDiscovery returned false")
-            scanReport = "stopped; discovered=${discovered.size}"
-            log("scan lifecycle stopped")
-        } catch (error: RuntimeException) { recordFailure("Scan cleanup", error) }
+            if (wasOwned) safely("Scan cleanup") {
+                val adapter = BluetoothCompatibility.adapter(app)
+                if (adapter?.isDiscovering == true && !adapter.cancelDiscovery()) log("scan cleanup FAIL cancelDiscovery returned false")
+                scanReport = "stopped; discovered=${discovered.size}"
+                log("scan lifecycle stopped")
+            }
+        } finally { unregisterScanReceiver() }
     }
 
     private fun closeSocket(connection: BluetoothSocket) {
-        try { connection.close() } catch (error: IOException) { recordFailure("RFCOMM socket cleanup", error) }
+        safely("RFCOMM socket cleanup") { connection.close() }
     }
 
-    @Synchronized private fun recordFailure(stage: String, error: Exception) {
+    private fun submit(stage: String, action: () -> Unit) {
+        if (closed) return
+        try {
+            worker.execute { if (!closed) action() }
+        } catch (error: java.util.concurrent.RejectedExecutionException) {
+            if (!closed) recordFailure(stage, error)
+        }
+    }
+
+    private fun safely(stage: String, onFailure: (Throwable) -> Unit = {}, action: () -> Unit) {
+        try { action() } catch (error: Exception) {
+            synchronized(this) { onFailure(error); recordFailure(stage, error) }
+        } catch (error: LinkageError) {
+            synchronized(this) { onFailure(error); recordFailure(stage, error) }
+        }
+    }
+
+    @Synchronized private fun recordFailure(stage: String, error: Throwable) {
         log("$stage FAIL ${error.javaClass.simpleName}: ${error.message}")
         publish()
     }
@@ -328,15 +392,21 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
     @Synchronized private fun publish() {
         report = buildString {
             appendLine(adapterReport)
-            appendLine("Bonded devices: ${bonded.size}")
+            appendLine("Android Bluetooth service available: $serviceReport")
+            appendLine("Adapter source: Android BluetoothManager only; no getDefaultAdapter fallback; not vehicle Bluetooth state")
+            appendLine("Bonded devices visible through Android APIs: ${if (!bondedVisible) "unknown/unavailable (not successfully enumerated)" else bonded.size.toString()}")
+            appendLine("Vehicle Bluetooth: operator reports GEELY_BT via Geely vehicle Settings; current vehicle/MCU state is not observable here and may be active independently")
+            appendLine("Vehicle/Android mismatch: ${if (androidEnabled != true) "possible if Bluetooth is active in vehicle Settings while Android is unavailable/disabled; verify manually" else "Android adapter reports enabled; vehicle integration still unverified"}")
+            appendLine("Bonded devices: ${if (bondedVisible) bonded.size.toString() else "unavailable (not successfully enumerated)"}")
             bonded.values.forEach { appendLine("  ${it.description()}") }
             appendLine("Manual scan: $scanReport")
+            appendLine("Scan supported: unknown (not tested; scanning is disabled in this safe-startup build)")
             appendLine("Discovered devices: ${discovered.size}")
             discovered.values.forEach { appendLine("  ${it.description()}") }
             appendLine("Selected iPhone candidate: ${selected?.description() ?: "none (explicit selection required)"}")
             appendLine("Service chosen: secure RFCOMM ${BluetoothCompatibility.IAP2_SERVICE_UUID}; no channel-number/private API fallback")
             appendLine("RFCOMM result: $connectReport")
-            appendLine("Socket connected: ${if (socket.get()?.isConnected == true) "yes" else "no"}; test running=${busy.get()}")
+            appendLine("Socket connected: ${if (socketConnected) "yes" else "no"}; test running=${busy.get()}")
             appendLine("Bytes sent=${sent.get()}; received=${received.get()} (consumed by pre-auth probe)")
             appendLine("iAP2: $framingReport")
             appendLine("Disconnect reason/error: $disconnect")
@@ -361,10 +431,7 @@ class Phase3BDeviceDiagnostics(context: Context, private val onUpdate: (String) 
         timer.shutdownNow()
         synchronized(this) {
             stopScan()
-            if (receiverRegistered) {
-                try { app.unregisterReceiver(receiver) } catch (error: RuntimeException) { recordFailure("Receiver cleanup", error) }
-                receiverRegistered = false
-            }
+            socketConnected = false
             if (busy.get()) disconnect = "Screen paused; socket closed to cancel test"
             publish()
         }

@@ -59,6 +59,7 @@ class Phase3BBluetoothTest {
             if (it.contains("firstControl=0x1d00") && it.contains("test running=false")) completed.countDown()
         }
         try {
+            diagnostics.refresh()
             assertTrue(sampled.await(5, TimeUnit.SECONDS))
             diagnostics.select(device.address)
             diagnostics.testRfcomm()
@@ -78,6 +79,7 @@ class Phase3BBluetoothTest {
                 offset += ((wire[offset + 2].toInt() and 0xff) shl 8) or (wire[offset + 3].toInt() and 0xff)
             }
             assertEquals(wire.size, offset)
+            verify(socket, times(1)).isConnected
         } finally { diagnostics.close() }
     }
 
@@ -91,6 +93,7 @@ class Phase3BBluetoothTest {
             if (it.contains("permission required=")) sampled.countDown()
         }
         try {
+            diagnostics.refresh()
             assertTrue(sampled.await(5, TimeUnit.SECONDS))
             assertTrue(diagnostics.diagnosticReport().contains("android.permission.BLUETOOTH_CONNECT"))
             assertEquals(listOf(android.Manifest.permission.BLUETOOTH_CONNECT),
@@ -118,6 +121,7 @@ class Phase3BBluetoothTest {
             if (it.contains("SDP service unavailable") && it.contains("test running=false")) completed.countDown()
         }
         try {
+            diagnostics.refresh()
             assertTrue(sampled.await(5, TimeUnit.SECONDS))
             diagnostics.select(device.address)
             diagnostics.testRfcomm()
@@ -141,12 +145,19 @@ class Phase3BBluetoothTest {
         shadowOf(adapter).setEnabled(true)
         val diagnostics = Phase3BDeviceDiagnostics(app) {}
         try {
+            assertFalse(scanReceiverRegistered(diagnostics))
+            diagnostics.refresh()
+            val refreshed = CountDownLatch(1)
+            diagnostics.refresh { refreshed.countDown() }
+            assertTrue(refreshed.await(5, TimeUnit.SECONDS))
+            assertFalse(scanReceiverRegistered(diagnostics))
             diagnostics.scan()
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (!diagnostics.diagnosticReport().contains("Manual scan: requested") && System.nanoTime() < deadline) {
                 Thread.sleep(10)
             }
             assertTrue(diagnostics.diagnosticReport(), diagnostics.diagnosticReport().contains("Manual scan: requested"))
+            assertTrue(scanReceiverRegistered(diagnostics))
             val device = adapter.getRemoteDevice("AA:BB:CC:DD:EE:02")
             app.sendBroadcast(android.content.Intent(BluetoothDevice.ACTION_FOUND).putExtra(BluetoothDevice.EXTRA_DEVICE, device))
             shadowOf(android.os.Looper.getMainLooper()).idle()
@@ -157,7 +168,63 @@ class Phase3BBluetoothTest {
             assertTrue(diagnostics.diagnosticReport().contains("RFCOMM result: not started"))
         } finally { diagnostics.close() }
         assertTrue(diagnostics.diagnosticReport().contains("Manual scan: stopped"))
+        assertFalse(scanReceiverRegistered(diagnostics))
     }
+
+    @Test fun scanCompletionUnregistersReceiverWithoutWaitingForActivityPause() {
+        val app = RuntimeEnvironment.getApplication()
+        shadowOf(app).grantPermissions(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        shadowOf(BluetoothCompatibility.adapter(app)!!).setEnabled(true)
+        val diagnostics = Phase3BDeviceDiagnostics(app) {}
+        try {
+            diagnostics.scan()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (!scanReceiverRegistered(diagnostics) && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(scanReceiverRegistered(diagnostics))
+            app.sendBroadcast(android.content.Intent(android.bluetooth.BluetoothAdapter.ACTION_DISCOVERY_FINISHED))
+            shadowOf(android.os.Looper.getMainLooper()).idle()
+            while (scanReceiverRegistered(diagnostics) && System.nanoTime() < deadline) Thread.sleep(10)
+            assertFalse(scanReceiverRegistered(diagnostics))
+            assertTrue(diagnostics.diagnosticReport().contains("Manual scan: finished"))
+        } finally { diagnostics.close() }
+    }
+
+    @Test fun failedScanUnregistersReceiverAndReportsVendorError() {
+        val app = RuntimeEnvironment.getApplication()
+        shadowOf(app).grantPermissions(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        shadowOf(BluetoothCompatibility.adapter(app)!!).setEnabled(true)
+        val context = spy(android.content.ContextWrapper(app))
+        `when`(context.applicationContext).thenReturn(context)
+        doThrow(SecurityException("Vendor rejects discovery receiver"))
+            .`when`(context).registerReceiver(any(), any(android.content.IntentFilter::class.java))
+        val completed = CountDownLatch(1)
+        val diagnostics = Phase3BDeviceDiagnostics(context) {
+            if (it.contains("Vendor rejects discovery receiver")) completed.countDown()
+        }
+        try {
+            diagnostics.scan()
+            assertTrue(completed.await(5, TimeUnit.SECONDS))
+            assertTrue(diagnostics.diagnosticReport().contains("Manual scan: FAIL"))
+            assertFalse(scanReceiverRegistered(diagnostics))
+        } finally { diagnostics.close() }
+    }
+
+    @Test fun vendorLinkageFailureInReaderIsReportedAsIoFailureNotUncaughtError() {
+        val socket = mock(BluetoothSocket::class.java)
+        val input = mock(java.io.InputStream::class.java)
+        `when`(socket.inputStream).thenReturn(input)
+        `when`(socket.outputStream).thenReturn(ByteArrayOutputStream())
+        `when`(input.read(any(ByteArray::class.java))).thenThrow(NoSuchMethodError("Vendor read missing"))
+        val stream = BluetoothRfcommDuplexStream(socket)
+        try {
+            val error = assertThrows(java.io.IOException::class.java) { stream.recv(8192, 2000) }
+            assertTrue(error.cause is NoSuchMethodError)
+        } finally { stream.close() }
+    }
+
+    private fun scanReceiverRegistered(diagnostics: Phase3BDeviceDiagnostics): Boolean =
+        Phase3BDeviceDiagnostics::class.java.getDeclaredField("receiverRegistered")
+            .apply { isAccessible = true }.getBoolean(diagnostics)
 
     @Test fun adapterBondedSnapshotAndExplicitSelectionDoNotConnect() {
         val app = RuntimeEnvironment.getApplication()
@@ -174,10 +241,11 @@ class Phase3BBluetoothTest {
             if (it.contains("Bonded devices: 1")) sampled.countDown()
         }
         try {
+            diagnostics.refresh()
             assertTrue(sampled.await(5, TimeUnit.SECONDS))
             diagnostics.select(device.address)
             val report = diagnostics.diagnosticReport()
-            assertTrue(report.contains("Adapter enabled: yes"))
+            assertTrue(report.contains("Android adapter enabled: yes"))
             assertTrue(report.contains("Test iPhone"))
             assertTrue(report.contains("AA:BB:CC:DD:EE:FF"))
             assertTrue(report.contains(BluetoothCompatibility.IAP2_SERVICE_UUID.toString()))

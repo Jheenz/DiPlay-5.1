@@ -89,6 +89,21 @@ class DiPlayActivity : ComponentActivity() {
     private var phase3BDiagnostics: Phase3BDeviceDiagnostics? = null
     private var phase3BText: TextView? = null
     private var phase3BReport = "Phase 3B Bluetooth diagnostics: not sampled"
+    private var vendorInvestigation: com.shilapi.xcertplay.transport.VehicleBluetoothInvestigation? = null
+    private var vendorInvestigationText: TextView? = null
+    private var vendorInvestigationReport = "Phase 3B.1 Vehicle Bluetooth investigation: not started"
+    private var nforetekDiagnostics: com.shilapi.xcertplay.transport.NForetekServiceDiagnostics? = null
+    private var nforetekText: TextView? = null
+    private var nforetekReport = "Phase 3B.2 NForetek service diagnostics: not inspected"
+    private var nforetekCacheDiagnostics: com.shilapi.xcertplay.transport.NForetekBluetoothCacheStatus? = null
+    private var nforetekCacheReport = "Phase 3B.3 cache-only vendor Bluetooth status: not sampled"
+    private var nforetekCacheText: TextView? = null
+    private var nforetekCacheButton: View? = null
+    private var nforetekCacheRunning = false
+    private var nforetekCacheGeneration = 0
+    private var vendorApkExportReport = "Vendor APK export: not started"
+    private var vendorApkExportText: TextView? = null
+    private var vendorApkExportRunning = false
     private var phase3BGeneration = 0
     private var phase3BPendingAction = "refresh"
     private var phase3BGrantedAction: String? = null
@@ -250,17 +265,6 @@ class DiPlayActivity : ComponentActivity() {
             return
         }
         handler.removeCallbacks(tick); handler.post(tick)
-        if (LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED && phase3BDiagnostics == null) {
-            val generation = ++phase3BGeneration
-            phase3BDiagnostics = Phase3BDeviceDiagnostics(applicationContext) { report ->
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed && generation == phase3BGeneration && phase3BDiagnostics != null) {
-                        phase3BReport = report
-                        phase3BText?.text = report
-                    }
-                }
-            }
-        }
         consumePhase3BGrantedAction()
         if (LegacyLaunchBuild.PHASE3A_DIAGNOSTICS_ENABLED && phase3ADiagnostics == null) {
             val generation = ++phase3AGeneration
@@ -287,6 +291,12 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
     override fun onPause() {
+        nforetekCacheDiagnostics?.let { it.close(); nforetekCacheReport = it.diagnosticReport() }
+        nforetekCacheDiagnostics = null
+        nforetekCacheRunning = false
+        nforetekCacheGeneration++
+        nforetekDiagnostics?.let { it.close(); nforetekReport = it.diagnosticReport() }
+        nforetekDiagnostics = null
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         pausedForAdbSwitchChange = adbSwitchChangePending
         handler.removeCallbacks(tick)
@@ -303,6 +313,13 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        nforetekCacheDiagnostics?.close()
+        nforetekCacheDiagnostics = null
+        nforetekCacheGeneration++
+        vendorInvestigation?.close()
+        vendorInvestigation = null
+        nforetekDiagnostics?.close()
+        nforetekDiagnostics = null
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         handler.removeCallbacks(automaticVehicleValidation)
         adbCheckGeneration++
@@ -330,6 +347,11 @@ class DiPlayActivity : ComponentActivity() {
     private fun render() {
         phase3AText = null
         phase3BText = null
+        vendorInvestigationText = null
+        nforetekText = null
+        nforetekCacheText = null
+        nforetekCacheButton = null
+        vendorApkExportText = null
         // A pending assignment belongs to the widgets being replaced, never to another page.
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         // A restore still waiting for layout keeps its target: the old page was never laid out.
@@ -895,11 +917,51 @@ class DiPlayActivity : ComponentActivity() {
                 phase3BText = label(phase3BReport, 15, TEXT).apply { setTextIsSelectable(true) }
                 card.addView(phase3BText)
                 card.addView(button(getString(R.string.phase3b_refresh), false) { requestPhase3BAction("refresh") }, matchButton())
-                card.addView(button(getString(R.string.phase3b_scan), false) { requestPhase3BAction("scan") }, matchButton())
-                card.addView(button(getString(R.string.phase3b_test), false) { requestPhase3BAction("test") }, matchButton())
-                card.addView(button(getString(R.string.bluetooth_settings), false) {
-                    openSystem(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                if (LegacyLaunchBuild.PHASE3B_TRANSPORT_TESTS_ENABLED) {
+                    card.addView(button(getString(R.string.phase3b_scan), false) { requestPhase3BAction("scan") }, matchButton())
+                    card.addView(button(getString(R.string.phase3b_test), false) { requestPhase3BAction("test") }, matchButton())
+                }
+            }
+            section(content, getString(R.string.phase3b1_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b1_help), 16, MUTED))
+                vendorInvestigationText = label(vendorInvestigationReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(vendorInvestigationText)
+                card.addView(button(getString(R.string.phase3b1_start), false) { startVendorInvestigation() }, matchButton())
+            }
+            section(content, getString(R.string.phase3b2_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b2_help), 16, MUTED))
+                nforetekText = label(nforetekReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(nforetekText)
+                card.addView(button(getString(R.string.phase3b2_inspect), false) { nforetekAction(bind = false) }, matchButton())
+                card.addView(button(getString(R.string.phase3b2_bind), false) { nforetekAction(bind = true) }, matchButton())
+                card.addView(label(getString(R.string.vendor_apk_export_help), 16, MUTED))
+                vendorApkExportText = label(vendorApkExportReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(vendorApkExportText)
+                card.addView(button(getString(R.string.vendor_apk_export), false) { exportVendorApks() }, matchButton())
+                card.addView(label(getString(R.string.vendor_control_export_help), 16, MUTED))
+                card.addView(button(getString(R.string.vendor_control_export), false) {
+                    exportVendorApks(controlImplementation = true)
                 }, matchButton())
+            }
+            section(content, getString(R.string.phase3b5_export_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b5_export_help), 16, MUTED))
+                card.addView(button(getString(R.string.phase3b5_export), false) {
+                    exportVendorApks(appleStack = true)
+                }, matchButton())
+            }
+            section(content, getString(R.string.phase3b5b_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b5b_help), 16, MUTED))
+                card.addView(button(getString(R.string.phase3b5b_discover), false) {
+                    exportVendorApks(appleDiscovery = true)
+                }, matchButton())
+            }
+            section(content, getString(R.string.phase3b3_cache_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b3_cache_help), 16, MUTED))
+                nforetekCacheText = label(nforetekCacheReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(nforetekCacheText)
+                nforetekCacheButton = button(getString(R.string.phase3b3_cache_read), false) { readNforetekCache() }
+                    .apply { isEnabled = !nforetekCacheRunning }
+                card.addView(nforetekCacheButton, matchButton())
             }
         }
         section(content, getString(R.string.diagnostics), R.drawable.ic_dp_diagnostics) { card ->
@@ -924,25 +986,182 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
 
-    private fun requestPhase3BAction(action: String) {
-        if (!LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED) return
-        val missing = BluetoothCompatibility.missingPermissions(this, scan = action == "scan")
-        if (missing.isNotEmpty()) {
-            phase3BPendingAction = action
-            phase3BPermissions.launch(missing.toTypedArray())
-        } else runPhase3BAction(action)
-    }
-
-    private fun consumePhase3BGrantedAction() {
-        if (phase3BDiagnostics == null) return
-        phase3BGrantedAction?.let { action ->
-            phase3BGrantedAction = null
-            runPhase3BAction(action)
+    private fun readNforetekCache() {
+        if (nforetekCacheRunning) return
+        try {
+            nforetekCacheDiagnostics?.close()
+            val token = ++nforetekCacheGeneration
+            nforetekCacheRunning = true
+            nforetekCacheButton?.isEnabled = false
+            val diagnostics = com.shilapi.xcertplay.transport.NForetekBluetoothCacheStatus(applicationContext, onUpdate = { report ->
+                runOnUiThread {
+                    if (token == nforetekCacheGeneration && !isFinishing && !isDestroyed) {
+                        nforetekCacheReport = report
+                        nforetekCacheText?.text = report
+                        if (nforetekCacheDiagnostics?.isComplete() == true) {
+                            nforetekCacheRunning = false
+                            nforetekCacheButton?.isEnabled = true
+                        }
+                    }
+                }
+            })
+            nforetekCacheDiagnostics = diagnostics
+            diagnostics.start()
+        } catch (error: RuntimeException) {
+            nforetekCacheFailed(error)
+        } catch (error: LinkageError) {
+            nforetekCacheFailed(error)
         }
     }
 
+    private fun nforetekCacheFailed(error: Throwable) {
+        nforetekCacheDiagnostics?.close()
+        nforetekCacheDiagnostics = null
+        nforetekCacheReport = "Phase 3B.3 cache status FAIL ${error.javaClass.simpleName}: ${error.message}"
+        Log.w("DiPlayPhase3B3Device", nforetekCacheReport, error)
+        nforetekCacheText?.text = nforetekCacheReport
+        nforetekCacheRunning = false
+        nforetekCacheButton?.isEnabled = true
+    }
+
+    private fun exportVendorApks(
+        controlImplementation: Boolean = false,
+        appleStack: Boolean = false,
+        appleDiscovery: Boolean = false,
+    ) {
+        if (vendorApkExportRunning) return
+        vendorApkExportRunning = true
+        vendorApkExportReport = if (appleDiscovery) {
+            "Phase 3B.5b: inventorying installed package/APK metadata and native filenames; exporting readable candidates only..."
+        } else if (appleStack) {
+            "Phase 3B.5 Apple/USB stack: collecting installed metadata and readable files only..."
+        } else if (controlImplementation) {
+            "Stock Geely control APK: searching installed metadata and verifying exact-match exports..."
+        } else "Vendor APK export: copying and verifying..."
+        vendorApkExportText?.text = vendorApkExportReport
+        val app = applicationContext
+        Thread({
+            val result = if (appleDiscovery) AppleImplementationDiscovery.discover(app)
+                else if (appleStack) AppleStackExport.export(app)
+                else if (controlImplementation) VendorBluetoothApkExport.exportControlImplementation(app)
+                else VendorBluetoothApkExport.export(app)
+            runOnUiThread {
+                vendorApkExportRunning = false
+                vendorApkExportReport = result
+                if (!isFinishing && !isDestroyed) vendorApkExportText?.text = result
+            }
+        }, "diplay-vendor-apk-export").start()
+    }
+
+    private fun nforetekAction(bind: Boolean) {
+        try {
+            val diagnostics = nforetekDiagnostics ?: com.shilapi.xcertplay.transport.NForetekServiceDiagnostics(applicationContext) { report ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        nforetekReport = report
+                        nforetekText?.text = report
+                    }
+                }
+            }.also { nforetekDiagnostics = it }
+            if (!bind) {
+                diagnostics.inspect()
+                return
+            }
+            val candidates = diagnostics.candidates().filter { it.bindEligible }
+            if (candidates.isEmpty()) {
+                toast(getString(R.string.phase3b2_inspect_first))
+                return
+            }
+            AlertDialog.Builder(this).setTitle(getString(R.string.phase3b2_select))
+                .setItems(candidates.map { it.component.flattenToString() }.toTypedArray()) { _, index ->
+                    if (nforetekDiagnostics === diagnostics) diagnostics.testBind(candidates[index].component)
+                }.setNegativeButton(getString(R.string.cancel), null).show()
+        } catch (error: RuntimeException) {
+            nforetekActionFailed(error)
+        } catch (error: LinkageError) {
+            nforetekActionFailed(error)
+        }
+    }
+
+    private fun nforetekActionFailed(error: Throwable) {
+        nforetekReport = "Phase 3B.2 FAIL ${error.javaClass.simpleName}: ${error.message}"
+        Log.w("DiPlayPhase3B2Device", nforetekReport, error)
+        nforetekText?.text = nforetekReport
+    }
+
+    private fun startVendorInvestigation() {
+        try {
+            val investigation = vendorInvestigation ?: com.shilapi.xcertplay.transport.VehicleBluetoothInvestigation(applicationContext) { report ->
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        vendorInvestigationReport = report
+                        vendorInvestigationText?.text = report
+                    }
+                }
+            }.also { vendorInvestigation = it }
+            investigation.start()
+        } catch (error: RuntimeException) {
+            vendorInvestigationFailed(error)
+        } catch (error: LinkageError) {
+            vendorInvestigationFailed(error)
+        }
+    }
+
+    private fun vendorInvestigationFailed(error: Throwable) {
+        vendorInvestigationReport = "Phase 3B.1 FAIL ${error.javaClass.simpleName}: ${error.message}"
+        Log.w("DiPlayPhase3B1Device", vendorInvestigationReport, error)
+        vendorInvestigationText?.text = vendorInvestigationReport
+    }
+
+    private fun requestPhase3BAction(action: String) {
+        if (!LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED) return
+        if (action != "refresh" && !LegacyLaunchBuild.PHASE3B_TRANSPORT_TESTS_ENABLED) {
+            phase3BReport = getString(R.string.phase3b_transport_disabled)
+            phase3BText?.text = phase3BReport
+            Log.w("DiPlayPhase3BDevice", phase3BReport)
+            return
+        }
+        try {
+            val missing = BluetoothCompatibility.missingPermissions(this, scan = action == "scan")
+            if (missing.isNotEmpty()) {
+                phase3BPendingAction = action
+                phase3BPermissions.launch(missing.toTypedArray())
+            } else runPhase3BAction(action)
+        } catch (error: RuntimeException) {
+            phase3BActionFailed(error)
+        } catch (error: LinkageError) {
+            phase3BActionFailed(error)
+        }
+    }
+
+    private fun consumePhase3BGrantedAction() {
+        phase3BGrantedAction?.let { action ->
+            phase3BGrantedAction = null
+            requestPhase3BAction(action)
+        }
+    }
+
+    private fun phase3BActionFailed(error: Throwable) {
+        phase3BReport = "Phase 3B diagnostics FAIL ${error.javaClass.simpleName}: ${error.message}"
+        Log.e("DiPlayPhase3BDevice", phase3BReport, error)
+        phase3BText?.text = phase3BReport
+    }
+
+    private fun phase3BDiagnosticsForAction(): Phase3BDeviceDiagnostics {
+        phase3BDiagnostics?.let { return it }
+        val generation = ++phase3BGeneration
+        return Phase3BDeviceDiagnostics(applicationContext) { report ->
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed && generation == phase3BGeneration && phase3BDiagnostics != null) {
+                    phase3BReport = report
+                    phase3BText?.text = report
+                }
+            }
+        }.also { phase3BDiagnostics = it }
+    }
+
     private fun runPhase3BAction(action: String) {
-        val diagnostics = phase3BDiagnostics ?: return
+        val diagnostics = phase3BDiagnosticsForAction()
         when (action) {
             "refresh" -> diagnostics.refresh()
             "scan" -> diagnostics.scan()
@@ -2803,22 +3022,34 @@ class DiPlayActivity : ComponentActivity() {
         val appContext = applicationContext
         val fileName = reportFileName()
         val networkDiagnostics = phase3ADiagnostics?.diagnosticReport() ?: phase3AReport
-        val bluetoothDiagnostics = phase3BDiagnostics?.diagnosticReport() ?: phase3BReport
+        val bluetoothDiagnostics = phase3BReport
+        val vehicleBluetoothDiagnostics = vendorInvestigationReport
+        val nforetekBluetoothDiagnostics = nforetekReport
+        val nforetekCacheStatus = nforetekCacheReport
+        val vendorApkDiagnostics = vendorApkExportReport
         Thread({
             val result = runCatching {
                 val report = buildString {
                     if (!LegacyLaunchBuild.CONNECTIONS_ENABLED) {
-                        appendLine("DiPlay ${version()} / Phase 3B hardware-validation test")
+                        appendLine("DiPlay ${version()} / Phase 3B.2 NForetek metadata/bind discovery")
                         appendLine("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}")
                         appendLine("Head unit: ${Build.MANUFACTURER} ${Build.MODEL}")
                         appendLine("Board: ${Build.BOARD}; hardware: ${Build.HARDWARE}; build: ${Build.DISPLAY}")
                         appendLine("CarPlay, USB projection, Wi-Fi Direct, LocalOnlyHotspot and BYD services: disabled")
-                        appendLine("Bluetooth: opt-in diagnostic RFCOMM/iAP2 link framing only")
+                        appendLine("Bluetooth: manual read-only diagnostics and vendor inventory; scan/RFCOMM/iAP2 disabled pending vendor identification and separate approval")
                         appendLine("Accessory authentication and vehicle integration: disabled")
                         appendLine("--- Phase 3A local network diagnostics ---")
                         appendLine(networkDiagnostics)
                         appendLine("--- Phase 3B Bluetooth diagnostics ---")
                         appendLine(bluetoothDiagnostics)
+                        appendLine("--- Phase 3B.1 Vehicle Bluetooth investigation ---")
+                        appendLine(vehicleBluetoothDiagnostics)
+                        appendLine("--- Phase 3B.2 NForetek service diagnostics ---")
+                        appendLine(nforetekBluetoothDiagnostics)
+                        appendLine("--- Phase 3B.3 cache-only vendor Bluetooth status ---")
+                        appendLine(nforetekCacheStatus)
+                        appendLine("--- Vendor Bluetooth APK export ---")
+                        appendLine(vendorApkDiagnostics)
                         return@buildString
                     }
                     appendLine("DiPlay ${version()} · private beta diagnostic report")

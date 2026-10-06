@@ -39,7 +39,7 @@ check. These six tests must be rerun on API 22; the earlier five-test emulator r
 historical, not validation of this build.
 
 Install/launch the mobile debug APK separately and confirm the visible version is
-`0.2.12-api22-phase3b-device-test` and projection/vehicle controls remain disabled.
+`0.2.12-api22-phase3b-safe-startup` and projection/vehicle controls remain disabled.
 Open **Settings -> Phase 3A network diagnostics**. It samples about every three seconds;
 **Refresh network diagnostics** reruns the sampler and stable readiness check.
 **Start Phase 3A network test** checks readiness before publishing a diagnostic-only
@@ -84,7 +84,7 @@ permission-policy and report/cleanup checks; it does not scan or connect without
 Robolectric uses supported API 23+ environments, while pure permission-policy tests cover API 22.
 Do not treat mocked RFCOMM or framing tests as real radio validation.
 
-Development validation: `:mobile:assembleDebug` and instrumentation APK compilation passed.
+Original Phase 3B device-test validation: `:mobile:assembleDebug` and instrumentation APK compilation passed.
 The focused selection passed 271 shared tests and 43 common tests with no failures/skips.
 Coverage includes API 22 permission policy, API 28 adapter/bonded/scan lifecycle, API 31
 permission denial, RFCOMM stream I/O, mocked hardware-mode connection success/failure,
@@ -92,9 +92,416 @@ pre-auth identification/authentication boundaries and Phase 1/2/3A regressions.
 Connected API 22 instrumentation was attempted but blocked by `No connected devices!`;
 API 22 Bluetooth runtime and real RFCOMM radio behavior remain hardware checks.
 
-On the parked Okavango:
+### Phase 3B.3 cache-only status hardware procedure
+
+1. Install `0.2.12-api22-phase3b3-nforetek-cache-status`. Verify launch and opening
+   Settings do not initiate a vendor test; the new section should say not sampled.
+2. Turn vehicle Bluetooth ON using Geely Settings and confirm `GEELY_BT`; keep its
+   UI/service active. Do not use stock Android Bluetooth enable or the older
+   Phase 3B.2 component bind selector.
+3. Press **Read cached NForetek Bluetooth status** in the Phase 3B.3 section.
+   Confirm the exact NfServiceBluetooth component, flags=0, matching descriptor and
+   genuine interface resolution. Capture all five raw values, interpreted enabled/state,
+   version, failures if any, and **Unbind SUCCESS**. Do not treat bind success as
+   transport success or cached readiness.
+4. Save the diagnostic report. Confirm Geely Bluetooth remains usable after unbind.
+   If vehicle Bluetooth is disturbed, stop testing and supply the report/logcat.
+5. Optionally change Bluetooth using Geely Settings, then manually repeat to compare
+   cached ON/OFF values (302/300). No automatic polling/change detection is implemented;
+   stale, null or unknown results must remain explicit.
+6. Missing service/bind=false/hash mismatch/timeouts do not trigger startup or fallback.
+   A hanging vendor IPC blocks repeat tests until it returns; a timeout does not imply
+   vendor code was terminated. Do not proceed to SPP/iAP2/authentication/Phase 3C.
+
+Focused Phase 3B.3 tests use synthetic cache interfaces, not redistributed vendor code,
+on Robolectric SDK 23/28 (Robolectric cannot execute API 22). They verify exactly five
+getter calls, no forbidden calls, inert construction/launcher, zero binding flags,
+descriptor/hash rejection, null/unknown values, vendor exceptions/linkage errors,
+missing/disabled service, disconnect, timeout/blocked IPC and unbind failures/cleanup.
+Real installed DexClassLoader/Stub resolution and cached GEELY_BT values were
+subsequently confirmed by the operator on the Okavango: flags=0 bind, descriptor,
+genuine interface resolution and clean unbind all passed; Bluetooth ON returned
+`GEELY_BT`, `00:0D:86:2F:20:23`, enabled=true and raw state=302/ON.
+Standard Android still reported the separate disabled CAR_BT adapter.
+This is a real-car result, separate from unit tests; OFF/ON cache freshness and
+the service-version value were not supplied in that result.
+
+Validation for `0.2.12-api22-phase3b3-nforetek-cache-status`: debug assembly passed;
+focused Phase 1/2/3A/Bluetooth/iAP2 shared regressions passed (271 cases); common
+phase/network/export regressions passed (146 cases, including 28 new Phase 3B.3 cases
+on SDK 23/28). API 22 instrumentation APK compilation passed, but no device was attached
+for execution. Packaged minSdk=22, armeabi-v7a included, and API-22 v1 signing verified.
+These are the focused regression suites, not a claim that the unrelated full suites
+with existing disabled-surface expectations are green.
+
+### Phase 3B.4 static audit and next-test recommendation
+
+See [COMPATIBILITY.md](COMPATIBILITY.md#phase-3b4-static-transport-path-audit) for
+the candidate-path matrix, exact methods/call sites and controller/lifecycle risks.
+This milestone changes documentation only, not the APK or runtime transport.
+No new build/test execution is required for this static audit; the preceding
+build and regression results remain historical validation of the cache build.
+
+The safest next hardware test uses the same five approved cache getters:
+on a parked vehicle, keep Geely Settings active, capture ON, OFF, then ON-again
+reports after changing Bluetooth only through the vehicle UI. Record the service
+version, raw values, interpreted states, exceptions, bind and unbind outcomes.
+Expect ON=302/true and OFF=300/false, without hiding stale or unavailable results.
+If flags=0 binding fails because the service stopped, do not start it.
+Verify the stock phone/audio functions still work after each test.
+
+Do not add a callback-only test: `registerBtCallback()` can trigger vendor
+initialization/controller queries and `setAutoConnect()` when internal readiness
+is false. Do not request paired devices, bind/start SPP, use serial/JNI/socket
+access, connect/pair, send payloads or answer Apple requests. Obtain the installed
+Geely Settings/control APK for the next local static audit instead of treating
+placeholder ECARX methods as a complete vehicle-UI trace. Phase 3C remains blocked.
+
+### Phase 3B.4 stock control APK collection procedure
+
+1. Install `0.2.12-api22-phase3b4-control-apk-export` on the Okavango. Launch and
+   open Settings; no control-package search or export runs automatically.
+2. In **Phase 3B.2 NForetek service diagnostics**, press
+   **Find and export stock Geely Bluetooth control APK** and wait for completion.
+   Do not press the vendor service-bind or investigation/callback buttons.
+3. For an exact match, record package, service/application/component or action
+   match, installed source path and every base/split export SUCCESS/FAIL.
+   Each successful copy reports destination, byte count and SHA-256.
+4. Copy all reported successful APK files from the existing `DiPlayVendorDump`
+   directory to the PC's ignored `vendor-apks/` directory. If public Downloads
+   failed, use the exact app external-files destination shown in the report.
+   Save the diagnostic report too. Partial split failures mean the package export
+   is incomplete; preserve that fact for static analysis.
+5. If there is no exact match, save the candidate package/component/source-path
+   report instead. Candidates are not launched, bound or automatically exported.
+   A failed/restricted inventory is not evidence that the implementation is absent.
+6. STOP after collection. Statically inspect the missing stock Settings/control
+   implementation before approving another interaction. Do not test a transport.
+
+Validation: `:mobile:assembleDebug` passed; focused shared Phase 1/2/3A/Bluetooth/iAP2
+regressions passed (271 tests); common phase/network/export regressions passed
+(164 tests), including 28 APK-export cases on SDK 23/28 (18 new control-collection
+cases). Tests cover exact class/namespace/action ownership in differently named
+packages, relative/disabled components, boundary lookalikes, base/split copies and
+hashes, candidate-only no-copy behavior, PM security/runtime/linkage failures,
+disappearing packages, partial split failure and absence of service/broadcast/
+receiver/system-service operations. Existing launcher-laziness/cache/network tests
+remain green. These are focused suites, not a full-suite claim.
+
+Instrumentation APK compilation passed; the new real-car export remains untested
+here. Packaged minSdk=22, armeabi-v7a inclusion and API-22 v1 signing were verified.
+The operator has now confirmed successful stock control APK extraction on the
+Okavango: package `com.neusoft.optimus.wheeljack.setting`, reported original
+source `/system/app/Setting/Setting.apk`. The local base APK has been statically
+audited together with the two earlier vendor APKs; this is not a live service test.
+
+### Phase 3B.4 combined Settings audit: hardware boundary
+
+See [the combined audit](COMPATIBILITY.md#phase-3b4-combined-audit-with-the-extracted-stock-settings-apk)
+for exact UI/Binder/controller call chains, candidate matrix, callback/broadcast
+effects, manifest-only BLE components and the external Apple JNI/USB boundary.
+The stock control service returns a null Binder and performs policy/vehicle work
+on creation. The real stock `UiCommand` bridge auto-creates NForetek profiles and
+registers callbacks. Neither is a safe replacement for the existing direct
+five-getter `NfServiceBluetooth` diagnostic. SPP remains prohibited/no-op.
+
+Recommended next test on a parked unit:
+
+1. Use the existing cache-status action only. With stock Geely Settings active,
+   capture ON, OFF and ON-again; change Bluetooth only through the stock UI.
+2. Record name/address, enabled, raw/interpreted state, service version,
+   flags=0 bind, descriptor, genuine interface resolution, errors and clean unbind.
+   Expected ON=302/true, OFF=300/false; preserve stale or failed results.
+   A stopped service is a bind failure, not permission to auto-create it.
+3. Confirm no new DiPlay Bluetooth/vehicle activity and that stock phone/audio
+   still works. Retain Phase 3A behavior and normal launch/pause/resume checks.
+4. Before further transport work, collect read-only installed metadata and source
+   APK(s) for the explicitly referenced package `com.neusoft.appleservice`.
+   Obtain readable `libAppleCore_jni.so` / `libApplePrivate_jni.so` plus native
+   dependencies/configuration from metadata-resolved or read-only inventoried
+   locations, not an assumed installation path. If authorized ADB is already
+   available, `adb shell pm path com.neusoft.appleservice` and
+   `adb shell dumpsys package com.neusoft.appleservice` are metadata-only leads;
+   copy only the reported readable files. Record source, ABI, bytes and SHA-256.
+   Do not load code, alter permissions, root/bypass denials, or start a service.
+5. STOP after collection for static inspection. Do not connect an iPhone through
+   DiPlay, register callbacks, bind stock control/bridge/BLE/SPP services, send
+   broadcasts/controller commands, access serial/USB nodes, initialize Apple JNI,
+   authenticate, send iAP2 or begin Phase 3C.
+
+This follow-up changes documentation only. No new APK, runtime transport,
+build identity or hardware capability was introduced; build/test results above
+remain the previous exporter validation, not new execution for this audit.
+
+### Phase 3B.5 collection-only hardware procedure
+
+1. Install `0.2.12-api22-phase3b5-apple-stack-export` on the parked API 22 unit.
+   Verify launch/Settings remains usable; no collection runs automatically.
+   Do not attach an iPhone or press any vendor service-bind/transport buttons.
+2. Open **Phase 3B.5 Apple/USB stack collection only**, then press
+   **Collect and export Apple/USB stack files** once. Wait for completion in the
+   existing vendor-export report above. No USB role or Bluetooth state change
+   should occur.
+3. Save the diagnostic report. Record package version, source/splits/library
+   directories, components/actions and every SUCCESS/FAIL, including missing
+   libraries/dependencies/config candidates, parser failures and extraction limits.
+   A copied APK/root plus unresolved dependencies is partial collection.
+4. Copy **exactly the files listed on SUCCESS lines** from the reported
+   `DiPlayVendorDump` destination to the PC's ignored `vendor-apks/` folder.
+   Base/split APKs and libraries/config candidates have source-disambiguating
+   filenames; every successful file has destination, bytes and SHA-256.
+   Use the reported app-external directory if public Downloads failed; do not
+   assume a destination or delete an earlier export to hide a failure.
+5. STOP after collection. Supply the report/files for static inspection.
+   Do not start/bind Apple services, load libraries, access `/dev/*`, send
+   broadcasts, change USB roles, connect an iPhone or authenticate.
+   Phase 3C and runtime USB/iAP2 remain disabled.
+
+Search/copy scope and filename patterns are documented in
+[COMPATIBILITY.md](COMPATIBILITY.md#phase-3b5-appleusb-stack-collection-build).
+Real-car collection has not run on the development PC, so exact installed file
+availability and destination paths require the operator's report.
+
+Phase 3B.5 development validation:
+
+- `:mobile:assembleDebug` passed; identity
+  `0.2.12-api22-phase3b5-apple-stack-export`, minSdk 22, packaged
+  `armeabi-v7a`, `arm64-v8a`, `x86_64`; API 22 v1 and v2 signatures verify.
+- Focused Phase 1/2/3A/3B/network/export regressions passed:
+  **271 shared + 190 common tests**, zero failures/errors/skips.
+  Includes **26 new collector cases** on Robolectric SDK 23/28:
+  exact base/splits, metadata and public manifest actions, missing/restricted/vendor
+  API failures, directory/APK libraries, direct-only dependencies, architecture
+  mismatch, absolute/scoped dependency paths, 32/64-bit both-endian ELF mapping,
+  malformed offsets/unterminated strings, traversal/device-path rejection,
+  unresolved configs, hashes/bytes, no config-content logging, temporary cleanup,
+  and no service/system-service/receiver/broadcast operations.
+  Existing lazy-launch/cache/network/export suites remain green.
+  The Phase 3A Settings test permits only the specifically named collection button
+  containing "USB"; USB connection controls remain forbidden.
+- `:shared:assembleDebugAndroidTest` passed. Instrumentation execution and actual
+  API 22 file readability/manifest behavior remain real-device checks, not executed
+  here. This is a focused-suite result, not a full-suite claim.
+- APK: `mobile/build/outputs/apk/debug/mobile-debug.apk`, 9,477,649 bytes;
+  SHA-256 `a82976377d9a81abf19da80bdd1fdfe92d9c8b152ee727a1efe0ed2d7945d08e`.
+  Editor checks and `git diff --check` passed. No real Apple-stack export files
+  have been created by running the collector on this PC.
+
+### Phase 3B.5b Apple implementation discovery procedure
+
+Phase 3B.5 real-car results: `com.neusoft.appleservice` returned
+NameNotFoundException, both named Apple JNI libraries were not found,
+`/system/vendor/lib64` / `/system/lib64` were readable, and no files were collected.
+Do not treat the old names as the active implementation, or a 64-bit-only search
+as complete discovery. The Settings DEX contains Java wrappers with unconditional
+class-initializer native loading, not a self-contained/manifest-registered Apple
+stack; see [the static findings](COMPATIBILITY.md#phase-3b5b-read-only-apple-implementation-discovery).
+
+1. Install `0.2.12-api22-phase3b5b-apple-discovery` on the parked Okavango.
+   Check launch/general Settings/pause/resume and Phase 3A as before.
+   No inventory/export should run until explicitly requested.
+2. Press **Phase 3B.5b Apple implementation discovery** once. Wait for the
+   existing vendor export report above to finish. Broad candidate APKs may be large;
+   this is not the older exact-name collector or a USB/Bluetooth test.
+3. Save the diagnostic report, preserving candidate packages/version/components/
+   actions, installed and readable APK sources/splits, every 32/64-bit and
+   package-native directory, matching native filenames, aliases, failures and
+   zero/partial results. Filename matches are not confirmed implementations.
+4. Copy only the **SUCCESS** files from their exact reported `DiPlayVendorDump`
+   paths to the PC's ignored `vendor-apks/` folder. Preserve report source,
+   destination, size and SHA-256. Read-denied/directory/non-file/symlink failures
+   are not instructions to change permissions or root/bypass the unit.
+5. **STOP after inventory/export**. Do not open the stock CarPlay dialog to test
+   missing libraries, bind/start services, send broadcasts, access `/dev/*`,
+   change USB roles, send Bluetooth commands, connect an iPhone or authenticate.
+   Supply the collected report/files for PC static inspection before any
+   further hardware interaction. No Phase 3C.
+
+Phase 3B.5b development validation:
+
+- `:mobile:assembleDebug` passed: packaged identity
+  `0.2.12-api22-phase3b5b-apple-discovery`, minSdk 22 and native ABIs
+  `armeabi-v7a`, `arm64-v8a`, `x86_64`. API 22 v1 and v2 signing verified.
+- Focused existing Phase 1/2/3A/3B/network/export regressions passed:
+  **271 shared + 218 common tests**, zero failures/errors/skips.
+  Includes **28 new discovery cases** on SDK 23/28 covering every requested
+  package/native term case-insensitively, differently named implementations,
+  APK-name/disabled-component/action-only/system-package/archive-component matches,
+  manifest tracking, parser event limit, exact six 32/64-bit locations,
+  package-native directories, filename-only nonrecursive matching, ordinary-file
+  copying/hash verification, no class/ELF interpretation, duplicate-source handling,
+  device/unavailable directory rejection and forbidden APK-source rejection before
+  resource/archive access, partial/denied/vendor framework failures,
+  and no service/Bluetooth/system-service/receiver/broadcast/intent-resolution work.
+  Existing lazy-launch/cache/network collectors remain green.
+- `:shared:assembleDebugAndroidTest` passed; no device instrumentation or
+  actual Phase 3B.5b head-unit inventory/export was executed here.
+  These are focused regressions, not a full-suite result.
+- APK: `mobile/build/outputs/apk/debug/mobile-debug.apk`, 9,527,524 bytes,
+SHA-256 `fea66a1fe635d6061e2a3f8845bad7a6888e8eb7f475a143e09107eeea03ca8e`.
+  Editor checks and `git diff --check` passed; vendor APK inputs remain local,
+  ignored/untracked. Exact car exports await the operator's report.
+
+### Phase 3B.2 APK export and earlier service procedure
+
+Manual APK export utility (historical APK collection step): press
+**Export vendor Bluetooth APKs** in the Phase 3B.2 section. It resolves
+`com.neusoft.geely.btphone.nf` and `com.nforetek.bt` through ApplicationInfo.sourceDir,
+copies base APKs only, verifies size and SHA-256, and displays separate success/failure.
+On API 22 the install-time storage permission permits an attempt at
+`Download/DiPlayVendorDump/btphoneNF.apk` and `Bluetooth-GocBtAPI.apk`; if public writing
+fails, the error is visible and the app external-files directory is tried. No runtime
+permission prompt/root/service/system modification is used. Save the report and copy
+both files to the PC using the exact displayed paths. Local APKs have now been audited:
+SPP is a no-op implementation and its destroy hook affects the shared vendor singleton.
+The operator chose to keep live SPP binding disabled; see COMPATIBILITY.md for the
+verified mappings and cached Bluetooth getter alternative. Partial copies
+are removed and verified copies are published only after verification.
+
+Export utility validation: `:mobile:assembleDebug` passed; focused shared Phase 1/2/3A
+and Bluetooth/iAP2 regressions passed (271 cases); common phase/network regressions
+including APK export passed (116 cases, including 10 export cases on SDK 23/28).
+API 22 instrumentation APK compilation passed; no connected car/device execution.
+Packaged minSdk remains 22 and `armeabi-v7a` remains present.
+
+Development validation: `:mobile:assembleDebug` passed. Final focused Phase 1/2/3A/3B/
+3B.1/3B.2 selection passed **271 shared + 106 common tests**, zero failures/errors/skips.
+The 22 SDK-parameterized NForetek tests cover permissions/export restrictions, zero-flag
+explicit bind/descriptor/unbind, false/security/null/disconnect results, timeout/late
+callbacks, stalled IPC isolation, pause cleanup, non-initializing/non-invoking class
+metadata and class-loading failures. API 22 instrumentation (manual inspect only, no
+automatic bind) compiled successfully. Packaged APK is minSdk 22 with `armeabi-v7a`,
+`arm64-v8a`, `x86_64`. No real vendor APK or device is available here, so actual service
+permissions/descriptors/methods/bindability are not yet known. Complete full-feature
+suites were not rerun in this step; the documented Phase 3B.1 gate-related failures
+remain outside this focused validation.
+
+Install `0.2.12-api22-phase3b2-nforetek-discovery`; confirm normal safe launch and Phase 3A.
+Keep Geely Bluetooth in its normal vehicle-UI state; never try to enable Android `CAR_BT`.
+
+1. Open **Phase 3B.2 NForetek service diagnostics -> Inspect vendor Bluetooth services**.
+   Wait for **Inspection complete**. Save the diagnostic report before testing any bind.
+2. Record exact components/process names, exported/enabled flags, required permissions,
+   protection levels/granted state, APK paths, DEX interface/Stub/Proxy names, loadability,
+   public method signatures and all class/permission failures. No automatic bind occurs.
+3. Press **Test read-only service bind** and select **one** eligible service. Only inspected,
+   exported, enabled, permitted known components appear. The explicit bind uses flags=0;
+   it does not auto-create a stopped service. If none qualify, do not bypass permission
+   or export restrictions. Reinspect after returning from another app because pause
+   cancels the model/bind.
+4. Wait up to five seconds. Save the report with `bindService` return, connected component,
+   Binder class, exact descriptor, local-interface metadata, disconnect/error/timeout and
+   unbind result. Capture `DiPlayPhase3B2Device` logcat if available. Test another service
+   separately if appropriate; prioritize `NfServiceBluetooth`, then `NfServiceSpp`, then
+   the Geely manager. Do not pair, scan or open SPP/RFCOMM.
+5. If binding returns false or times out, record whether the vehicle UI was open and
+   Bluetooth ON/OFF; do not start the vendor service or guess required intent extras.
+   A stopped service cannot be established with the chosen no-auto-create test.
+6. Report any unexpected vehicle-UI effects and stop further binds. `onBind`/`onUnbind`
+   executes vendor lifecycle code even though DiPlay sends no Bluetooth controls.
+
+Use collected method/type names only as evidence. `Spp` naming is not proof of raw-byte
+access, supported UUIDs, iAP2 compatibility or ordinary-app permission. `BtManagerService`
+delegation cannot be inferred from naming; a supplied readable vendor APK may be required
+for further interface/bytecode investigation. No Phase 3C or control commands are authorized.
+
+### Phase 3B.1 vendor-discovery hardware procedure
+
+Safe startup is now confirmed on the Okavango. Standard Android `CAR_BT` remains disabled
+while vehicle `GEELY_BT` is active; do not attempt RFCOMM/iAP2 using it.
+Install `0.2.12-api22-phase3b1-vendor-discovery` and verify normal launch/Settings and
+Phase 3A still work with no automatic Bluetooth/vendor inventory.
+
+1. Optionally manually Refresh the existing Phase 3B diagnostics to retain the Android
+   service/adapter comparison in the exported report.
+2. Open **Phase 3B.1 Vehicle Bluetooth investigation** and press **Start read-only vehicle
+   Bluetooth investigation**. Wait until it says **Observing for 30 seconds**.
+3. Within that window, open the Geely vehicle UI and toggle Bluetooth OFF then ON.
+   Listening continues during activity pause; it ends automatically. Do not scan, connect,
+   change Android settings, pair through DiPlay or invoke unknown components.
+4. Return to DiPlay. Check the completion line; save the existing diagnostic report.
+   If the activity was destroyed, the report will show cancellation (or be lost after
+   process death); rerun manually. Duplicate Start presses during a run do not restart it.
+5. Capture exact package/application names, APK/library locations, exported component
+   class/process names, permissions/provider authorities, matching running services,
+   readable allowlisted properties, subscribed action names, observed actions/timing/state
+   numbers/extra keys, and all access failures/truncation notices. Note separately which
+   UI toggle occurred at each time and whether GEELY_BT remained discoverable.
+6. Repeat with vehicle Bluetooth OFF to compare service inventory, then ON if needed.
+   Reports contain component/package metadata; review before sharing.
+
+No public wildcard-broadcast receiver or complete Binder/property enumeration exists.
+Protected/private/non-manifest vendor events may be invisible; exported components may
+still require signature permissions. An empty report is not evidence of no vendor layer.
+Logs use `DiPlayPhase3B1Device` for inventory/receiver lifecycle and failures.
+The next milestone is identifying the stock integration from these names, not invoking it.
+No Phase 3C work is authorized.
+
+Phase 3B.1 development results:
+
+- `:mobile:assembleDebug` passed; packaged label is
+  `0.2.12-api22-phase3b1-vendor-discovery`, minSdk 22, ABIs `armeabi-v7a`,
+  `arm64-v8a`, `x86_64`.
+- Final focused Phase 1/2/3A/3B/3B.1 regressions: **271 shared + 84 common tests**
+  passed, zero failures/errors/skips. Includes 12 vendor-inventory cases across API 23/28:
+  inert constructor, exported metadata, receiver-action parsing/relative class names,
+  secret-value omission, timeout/destruction cleanup, duplicate Start, failure handling
+  and property/name filtering. All 26 lazy-launch cases remain passing.
+- Complete suites were also run: shared **685 tests / 1 failure**, common
+  **566 tests / 42 failures**. These expect intentionally disabled legacy-build surfaces:
+  BYD startup recovery (1), BYD Settings reconnection (3), BYD vehicle Settings (24),
+  hotspot boot controls (2), full location-reporting Settings (5), system-bar Settings (5)
+  and the disabled USB host activity (3). For example, USB tests get
+  `NameNotFoundException: Disabled component: CarPlayHostActivity`; the BYD recovery test
+  expects a command from `onAppOpened`, which already returns when the vendor gate is
+  false. Those gates/manifests predate this investigation and were not enabled to make
+  full-feature tests pass. This is not a green complete-suite claim.
+- API 22 instrumentation, including the new manual-inventory smoke test, compiled.
+  No device is connected here, so actual API 22 enumeration/broadcast delivery remains
+  a real-car check. Robolectric cannot run API 22.
+
+### Historical safe-startup milestone (now hardware confirmed)
+
+Install `0.2.12-api22-phase3b-safe-startup` on the parked Okavango. Launch with vehicle
+Bluetooth off, then on in the Geely vehicle Settings UI. Do not use normal Android
+Bluetooth Settings to infer vehicle state. Home, general Settings, About, export and
+pause/resume must work before any Phase 3B action. The Bluetooth section stays "not sampled";
+scan/RFCOMM buttons and actions are disabled pending confirmed real-hardware launch.
+Phase 3A networking must behave as before.
+
+Only then, optionally press **Refresh Bluetooth diagnostics**. It reads the Android
+BluetoothManager once (no default-adapter fallback), distinguishes service availability,
+adapter presence/enabled state and bonded-device visibility, and reports a possible
+vehicle/Android mismatch without claiming to observe the MCU. Null/restricted/throwing
+Android APIs must show diagnostic failures without stopping the activity. No scan
+receiver is registered and no transport or adapter-enable work is performed.
+Save a report; for a crash collect `adb logcat -b crash` or the AndroidRuntime exception
+from regular logcat if available. The exact original exception is not yet confirmed.
+Do not run RFCOMM or proceed to Phase 3C before successful launch is reported.
+
+Safe-startup development validation: `:mobile:assembleDebug` passed. The full focused
+Phase 1/2/3A plus Bluetooth/iAP2 regression selection passed **271 shared + 72 common
+tests**, with zero failures, errors or skips. This includes 26 SDK-parameterized lazy
+startup/manual-failure tests, nine Bluetooth transport/receiver tests and the Settings
+safety-gate test. Transport tests use mocks only; no radio test was performed.
+`:shared:assembleDebugAndroidTest` compiled successfully. No Android device was connected,
+so API 22 instrumentation execution and real Okavango launch remain unverified.
+Packaged APK metadata confirms `0.2.12-api22-phase3b-safe-startup`, minSdk 22 and
+`armeabi-v7a`, `arm64-v8a`, `x86_64`. Phase 3A implementation is unchanged.
+
+### Historical device-test steps (not enabled in the safe-startup APK)
+
+These steps document the prior transport build only. Do not perform them during the
+current launch milestone; the unit tests exercise mocked transports without contacting
+an iPhone or the head unit.
+
+On the parked Okavango, after transport testing is separately authorized:
 
 1. Install the debug APK and confirm `0.2.12-api22-phase3b-device-test`.
+   For the launch-regression retest, first leave Bluetooth off/unavailable and open the
+   app, general Settings, About and diagnostic export without pressing a Phase 3B action.
+   All must launch without accessing Bluetooth. The Phase 3B section remains "not sampled".
+   Background/resume the app and repeat; Phase 3A diagnostics should behave as before.
 2. Enable Bluetooth using the car settings. On the iPhone, open **Settings -> Bluetooth**
    and pair with the car using its normal pairing UI. Do not initiate CarPlay.
 3. Open **DiPlay Settings -> Phase 3B Bluetooth diagnostics -> Refresh Bluetooth diagnostics**.
@@ -117,9 +524,21 @@ On the parked Okavango:
 8. Save the diagnostic report; capture `adb logcat -s DiPlayPhase3BDevice` where available.
    Reports deliberately contain Bluetooth names/MACs; review before sharing publicly.
 
+Bluetooth diagnostics are now fully lazy: Refresh performs one read; there is no
+periodic adapter/bonded-device sampling. Merely rendering Settings does not initialize
+Bluetooth. Receivers are registered only for a manual scan and unregistered on
+completion, failure, timeout or pause. A vendor runtime/linkage error must be shown as
+FAIL without terminating the activity. API 23/28 Robolectric launcher tests substitute
+missing-service, null-adapter, disabled, throwing adapter-state and throwing bonded-device
+stacks and verify zero Bluetooth service/adapter access through create/start/resume,
+Settings and pause/resume. Manual Refresh tests cover security, runtime and linkage
+failures, missing service, preserved partial observations and vehicle-state uncertainty.
+API 22 itself still needs a device retest.
+
 If RFCOMM fails, record the exact SDP/connect/timeout reason and cached service UUIDs.
-No hidden channel-number or insecure fallback is attempted. The next milestone is real
-RFCOMM plus pre-auth framing success. Only after that evidence and explicit approval should
+No hidden channel-number or insecure fallback is attempted. The current next milestone is
+successful safe startup on the real head unit. RFCOMM/pre-auth testing remains withheld.
+Only after safe launch, separately authorized transport evidence and explicit approval should
 identification/authentication or Phase 3C be considered.
 
 ## Custom stream resolution

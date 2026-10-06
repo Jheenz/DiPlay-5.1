@@ -147,6 +147,8 @@ class BluetoothRfcommDuplexStream(
             }
         } catch (io: IOException) {
             if (!isClosed()) readFailure = io
+        } catch (error: LinkageError) {
+            if (!isClosed()) readFailure = IOException("Bluetooth RFCOMM vendor read API unavailable", error)
         } catch (failure: Throwable) {
             readFailure = IOException("Bluetooth RFCOMM reader failed", failure)
             if (failure is Error) throw failure
@@ -187,6 +189,8 @@ class BluetoothRfcommDuplexStream(
         return try {
             socket.close()
             null
+        } catch (error: LinkageError) {
+            IOException("Bluetooth RFCOMM vendor close API unavailable", error)
         } catch (failure: Throwable) {
             if (failure is Error) throw failure
             IOException("Could not close the Bluetooth RFCOMM socket", failure)
