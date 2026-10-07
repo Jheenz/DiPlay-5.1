@@ -1,5 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="phase3d2i_title">Phase 3D.2I — Active configuration 5 USBMUX claim</string>
+    <string name="phase3d2i_claim">Claim/release configuration-5 USBMUX</string>
+    <string name="phase3d2i_warning">CLAIM/RELEASE ONLY — NO USBMUX PROTOCOL TRAFFIC. Requires already-active configuration 5 and existing USB permission. One force=false claim, release if successful, close and STOP.</string>
+    <string name="phase3d2i_confirm">Verify the already-transitioned five-configuration iPhone and Valeria interface-name evidence. Open once, require same-connection GET_CONFIGURATION=5, claim only configuration-5 USBMUX ID1/alt0 with force=false once, release once if claimed, close and STOP. No configuration setter, vendor request, alternate change, driver detach, bulk/interrupt transfer, USBMUX packets or Lockdown. No retry. Public Android claim/release APIs have no timeout argument. Leave Trust This Computer? untouched; do not approve or reject it. Proceed?</string>
+    <string name="phase3d2i_send">Claim/release ONCE</string>
+    <string name="phase3d2i_running">Validating active configuration 5 and claiming/releasing USBMUX only…</string>
+    <string name="phase3d2g_title">Phase 3D.2G — Post-Valeria configuration 5 selection</string>
+    <string name="phase3d2g_select">Select post-Valeria configuration</string>
+    <string name="phase3d2g_warning">STATE-CHANGING USB TEST — selects configuration 5 once after read-only preflight. No vendor request, interface claims or transport. Run Phase 3D.2E separately first.</string>
+    <string name="phase3d2g_confirm">Require the already-transitioned five-configuration iPhone, exact Valeria in configuration 5, existing permission and active configuration 1. Select only value 5 once, verify GET_CONFIGURATION, observe for 10 seconds, close and STOP. No retry or restore. The public Android setter has no timeout argument. Do not approve Trust. Proceed?</string>
+    <string name="phase3d2g_send">Select 5 ONCE</string>
+    <string name="phase3d2g_running">Validating/selecting configuration 5 and observing USB state…</string>
     <string name="legacy_launch_only_status">Android 5.1 Phase 3B.2 NForetek discovery</string>
     <string name="legacy_launch_only_description">Phase 3B.2 NForetek metadata and zero-flag bind discovery. Bluetooth is not accessed at launch. Phase 3A networking, Phase 3B Refresh and Phase 3B.1 inventory remain available. New inspection and bind tests are explicitly manual. No vendor commands, scan, SPP/RFCOMM, iAP2, authentication, CarPlay, USB projection, Wi-Fi Direct, LocalOnlyHotspot or vehicle integration.</string>
     <string name="phase3b_diagnostics">Phase 3B Bluetooth diagnostics</string>
@@ -23,6 +35,48 @@
     <string name="phase3b5b_title">Phase 3B.5b Apple implementation discovery</string>
     <string name="phase3b5b_discover">Phase 3B.5b Apple implementation discovery</string>
     <string name="phase3b5b_help">Manual read-only installed package/APK/component/action inventory and native filename discovery. Searches broad Apple/USB/projection/phone/Neusoft terms, not assumed Apple package/library names. Examines readable system lib/lib64 locations and package nativeLibraryDir without recursion or library loading. Ordinary readable candidate base/split APKs and native files are copied to DiPlayVendorDump with exact paths, bytes and SHA-256; denied/missing files and partial results remain visible in the vendor export report above and Save diagnostic report. May copy several large candidate APKs. No services, broadcasts, /dev access, USB roles, Bluetooth commands, iPhone connection or authentication. STOP after inventory/export for PC static inspection; no Phase 3C.</string>
+    <string name="phase3b8_title">Phase 3B.8 — Full E01 CarPlay system inventory</string>
+    <string name="phase3b8_warning">Read-only system/vendor inventory. Does not activate CarPlay, USB, Bluetooth, Apple services, JNI or authentication.</string>
+    <string name="phase3b8_run">Run full read-only CarPlay inventory</string>
+    <string name="phase3b8_scanning">Scanning...</string>
+    <string name="phase3b8_completed">Completed</string>
+    <string name="phase3b8_completed_errors">Completed with errors</string>
+    <string name="phase3c3c_title">Phase 3C.3C — Passive MFi/I2C inventory</string>
+    <string name="phase3d1_title">Phase 3D.1 — Direct iPhone USB detection</string>
+    <string name="phase3d2a_title">Phase 3D.2A — iPhone USB configuration mapping</string>
+    <string name="phase3d2c1_title">Phase 3D.2C1 — QDrive USB branch discriminator</string>
+    <string name="phase3d2e_title">Phase 3D.2E — Controlled QDrive USB vendor transition</string>
+    <string name="phase3d2e_warning">STATE-CHANGING USB TEST — sends one verified QDrive vendor request</string>
+    <string name="phase3d2e_preflight">Check QDrive transition preflight (read-only)</string>
+    <string name="phase3d2e_test">Test QDrive USB mode transition</string>
+    <string name="phase3d2e_running">QDrive diagnostic running; wait for cleanup and save report...</string>
+    <string name="phase3d2e_send">Send ONE request</string>
+    <string name="phase3d2e_help">Manual controlled experiment, separate from read-only tests. First check preflight: one permitted 05AC:12A8 iPhone, active configuration 1/PTP and complete non-Valeria result. Then confirm ONE OUT vendor request 40/52/value 0/index 2/no payload with a 1000ms timeout (QDrive uses unbounded 0). Original connection closes immediately; observe for 10 seconds, then read permitted Apple state only. No retries, configuration changes, claims, bulk or transport. Remove Carlinkit; do not approve Trust. Save report and STOP.</string>
+    <string name="phase3d2e_confirm">STATE-CHANGING USB TEST — sends one verified QDrive vendor request.\n\nThis may disconnect or change the directly connected iPhone USB state. Preflight will be reverified, then exactly ONE 0x40/0x52/value 0/index 2/length 0 request is allowed. Timeout is 1000ms instead of QDrive’s unbounded 0. No retry, configuration setter, interface claim or transport startup. Observe for 10 seconds and inspect read-only if permission remains. Do not approve Trust. Save report and STOP.</string>
+    <string name="phase3d2c1_inspect">Inspect iPhone interface strings</string>
+    <string name="phase3d2c1_running">Inspecting read-only USB interface strings...</string>
+    <string name="phase3d2c1_busy">STOP: a USB diagnostic is running. Wait for connection cleanup.</string>
+    <string name="phase3d2c1_help">Manual read-only descriptor inspection. Requires existing USB permission. Reads current configuration, raw descriptors and only the interface strings checked by QDrive, using standard GET_DESCRIPTOR requests with 1000ms timeouts. Opens without claims and closes afterward. Neither configuration selection nor vendor mode switching is executed. QDrive matches the case-sensitive substring Valeria, not just exact equality. Remove Carlinkit, connect the unlocked iPhone directly, inspect, save report and STOP. Do not approve Trust or run other USB tests.</string>
+    <string name="phase3d2b_title">Phase 3D.2B — Active iPhone USB configuration</string>
+    <string name="phase3d2b_read">Read active USB configuration</string>
+    <string name="phase3d2b_running">Reading standard USB GET_CONFIGURATION...</string>
+    <string name="phase3d2b_transport_running">STOP: another USB transport test is running. Cancel it before reading configuration.</string>
+    <string name="phase3d2b_read_running">STOP: GET_CONFIGURATION is running. Wait for its connection cleanup.</string>
+    <string name="phase3d2b_help">Manual read-only standard USB device request ONLY. Requires existing USB permission. Opens the Apple device, sends GET_CONFIGURATION (0x80/0x08, one byte, 1000ms timeout), then immediately closes it. No interface claim, permission request, configuration/alternate-setting change, bulk transfer, USBMUX, Lockdown, pairing, authentication or projection. Correlates the returned configuration value with descriptors; never guesses from array order. Remove Carlinkit, connect the unlocked iPhone directly, press Read, then Save diagnostic report and STOP. Do not run the Phase 3D.2 transport test or approve Trust.</string>
+    <string name="phase3d2a_map">Map iPhone USB configurations</string>
+    <string name="phase3d2a_help">PASSIVE ONLY. Reads Android configuration/interface/alternate-setting and endpoint metadata alongside the flattened interface list. Correlates USBMUX descriptors without selecting an interface or inferring the active configuration. No device open, permission request, claim, configuration change or transfer; no USBMUX, Lockdown, pairing or projection. Remove Carlinkit, connect the unlocked iPhone directly, press Map, then Save diagnostic report. Do not press Test USBMUX + Lockdown or approve Trust. STOP after Phase 3D.2A collection.</string>
+    <string name="phase3d2_title">Phase 3D.2 — Direct USBMUX/Lockdown test</string>
+    <string name="phase3d2_help">Manual transport test ONLY. With Carlinkit removed, connect an unlocked iPhone directly to the driver-side USB port. Requires existing Android USB permission; never requests it. Opens and claims only the descriptor-selected USBMUX interface (255/254/2), performs USBMUX v2 and connects to Lockdown port 62078 for one plaintext GetValue(ProductType) query. No pairing, Trust changes, session/TLS, CarKit, iAP2, MFi, NCM, Bluetooth, AirPlay or CarPlay. Step timeouts are 5 seconds; overall deadline is 25 seconds. Leaving the activity cancels the test. If Trust appears on the iPhone, do not approve it; press Trust prompt appeared — STOP. Save diagnostic report and STOP.</string>
+    <string name="phase3d2_test">Test USBMUX + Lockdown</string>
+    <string name="phase3d2_running">Testing USBMUX + Lockdown...</string>
+    <string name="phase3d2_cancel">Cancel transport test</string>
+    <string name="phase3d2_trust_stop">Trust prompt appeared — STOP</string>
+    <string name="phase3d1_help">Manual Android USB host descriptor inventory only. Remove the Carlinkit dongle completely. Scan USB port 1 with nothing connected and save the baseline, then connect an unlocked iPhone directly with a known-good data cable and scan again. Do not approve Trust or other prompts. No permission request, device open, interface claim, transfer, USB role/mode change, vendor service, Bluetooth or authentication. Apple VID is only a candidate, not proof of CarPlay. Save diagnostic report, then STOP after Phase 3D.1.</string>
+    <string name="phase3d1_scan">Scan connected USB devices</string>
+    <string name="phase3d1_running">Reading USB descriptor inventory...</string>
+    <string name="phase3c3c_help">Manual read-only inventory of direct /dev/i2c-* entries and the two I2C sysfs directories only. Reads bounded textual sysfs metadata and symlink information. Does not open device nodes, issue ioctl, access I2C hardware, run the MFi scanner, connect USB/Bluetooth/iPhone, or start CarPlay. Generic addresses such as 0x10/0x11 are not proof of MFi hardware. Press Run, then use Save diagnostic report to export the result.</string>
+    <string name="phase3c3c_run">Run passive MFi/I2C inventory</string>
+    <string name="phase3c3c_running">Inspecting approved filesystem paths...</string>
     <string name="phase3b5_export">Collect and export Apple/USB stack files</string>
     <string name="phase3b5_export_help">Manual package metadata and file copy ONLY. Exports com.neusoft.appleservice base/split APKs, readable AppleCore/ApplePrivate JNI libraries, direct ELF dependencies and resolvable config-reference candidates. Uses package library locations and the public Java library search path; no guessed system APK path. No service bind/start, native loading, /dev access, broadcasts, USB role changes, iPhone connection or authentication. Results with exact paths, sizes, SHA-256 and failures appear in the vendor export report above and Save diagnostic report. Config contents are not logged. STOP after collection and supply the files to the PC for static inspection; no Phase 3C.</string>
     <string name="phase3b2_select">Select already-running exported vendor service</string>

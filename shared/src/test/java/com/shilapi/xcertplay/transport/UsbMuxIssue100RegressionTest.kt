@@ -120,10 +120,10 @@ class UsbMuxIssue100RegressionTest {
 
     private fun host(): Iap2UsbMuxHost {
         return Iap2UsbMuxHost::class.java.getDeclaredConstructor(
-            Iap2UsbSession::class.java, Long::class.javaPrimitiveType,
-            kotlin.jvm.functions.Function1::class.java).apply {
+            UsbMuxBulkPipe::class.java, Long::class.javaPrimitiveType,
+            kotlin.jvm.functions.Function1::class.java, Long::class.javaPrimitiveType).apply {
             isAccessible = true
-        }.newInstance(pipe(), 1000L, { _: String -> })
+        }.newInstance(pipe(), 1000L, { _: String -> }, 60_000L)
     }
 
     private fun pipe(): Iap2UsbSession {

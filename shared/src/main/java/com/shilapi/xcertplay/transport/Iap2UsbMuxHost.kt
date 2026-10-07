@@ -12,9 +12,10 @@ import java.util.ArrayDeque
  * may block and must run away from Android's main thread.
  */
 class Iap2UsbMuxHost private constructor(
-    private val pipe: Iap2UsbSession,
+    private val pipe: UsbMuxBulkPipe,
     private val readTimeoutMillis: Long,
     private val onDiagnostic: (String) -> Unit,
+    private val handshakeTimeoutMillis: Long,
 ) : Closeable {
     private val stateLock = Any()
     private val writeLock = Any()
@@ -109,10 +110,10 @@ class Iap2UsbMuxHost private constructor(
         putU32(version, 0, PROTOCOL_VERSION)
         putU32(version, 4, VERSION_MESSAGE_BYTES)
         putU32(version, 8, USBMUX_VERSION)
-        pipe.write(version, HANDSHAKE_TIMEOUT_MILLIS.toInt())
+        pipe.write(version, handshakeTimeoutMillis.toInt())
         // The phone replies with the same proto=0, length=20, version=2 packet. Protocol 1 is not
         // a distinct "version reply" here; waiting for it discards the valid reply and times out.
-        val deadline = System.nanoTime() + HANDSHAKE_TIMEOUT_MILLIS * NANOS_PER_MILLISECOND
+        val deadline = System.nanoTime() + handshakeTimeoutMillis * NANOS_PER_MILLISECOND
         var staleFrames = 0
         var reply: UsbMuxFrame
         while (true) {
@@ -286,16 +287,22 @@ class Iap2UsbMuxHost private constructor(
 
         /** Performs the USBMUX v2 handshake and starts the framed reader. */
         fun open(
-            pipe: Iap2UsbSession,
+            pipe: UsbMuxBulkPipe,
             readTimeoutMillis: Long = 1_000,
             onDiagnostic: (String) -> Unit = {},
+            handshakeTimeoutMillis: Long = HANDSHAKE_TIMEOUT_MILLIS,
         ): Iap2UsbMuxHost {
             require(readTimeoutMillis > 0) { "readTimeoutMillis must be positive" }
-            return Iap2UsbMuxHost(pipe, readTimeoutMillis, onDiagnostic).also {
+            require(handshakeTimeoutMillis in 1..Int.MAX_VALUE.toLong()) { "Invalid handshake timeout" }
+            return Iap2UsbMuxHost(pipe, readTimeoutMillis, onDiagnostic, handshakeTimeoutMillis).also {
                 try {
                     it.begin()
                 } catch (error: Throwable) {
-                    it.close()
+                    try {
+                        it.close()
+                    } catch (cleanup: Throwable) {
+                        error.addSuppressed(cleanup)
+                    }
                     throw error
                 }
             }

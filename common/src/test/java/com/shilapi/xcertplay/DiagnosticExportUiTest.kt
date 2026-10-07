@@ -39,6 +39,22 @@ class DiagnosticExportUiTest {
             override fun getContract() = androidx.activity.result.contract.ActivityResultContracts.CreateDocument("text/plain")
         }
         ReflectionHelpers.setField(activity, "export", missingPicker)
+        val usbReport = PassiveUsbDeviceDiagnostic(PassiveUsbInventory { emptyList() }).scan()
+        ReflectionHelpers.setField(activity, "passiveUsbReport", usbReport)
+        val directReport = com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic.NOT_RUN
+        ReflectionHelpers.setField(activity, "directUsbMuxReport", directReport)
+        val mappingReport = PassiveUsbDeviceDiagnostic(PassiveUsbInventory { emptyList() }, true).scan()
+        ReflectionHelpers.setField(activity, "usbConfigurationReport", mappingReport)
+        val activeConfigurationReport = ActiveUsbConfigurationDiagnostic.NOT_RUN
+        ReflectionHelpers.setField(activity, "activeUsbConfigurationReport", activeConfigurationReport)
+        val branchReport = QDriveBranchDiagnostic.NOT_RUN
+        ReflectionHelpers.setField(activity, "qdriveDescriptorReport", branchReport)
+        val transitionReport = "${QDriveVendorTransitionDiagnostic.TITLE}\nQDRIVE VENDOR TRANSITION INCONCLUSIVE\nVendor request attempted=true"
+        ReflectionHelpers.setField(activity, "qdriveTransitionReport", transitionReport)
+        val configurationReport = "${QDriveConfigurationDiagnostic.TITLE}\nQDRIVE CONFIGURATION 5 SELECTION CONFIRMED"
+        ReflectionHelpers.setField(activity, "qdriveConfigurationReport", configurationReport)
+        val claimReport = "${ActiveConfig5UsbMuxClaimDiagnostic.TITLE}\n${ActiveConfig5UsbMuxClaimDiagnostic.PASS}\n${ActiveConfig5UsbMuxClaimDiagnostic.PROTOCOL_NOT_TESTED}"
+        ReflectionHelpers.setField(activity, "activeConfig5ClaimReport", claimReport)
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "chooseReportDestination")
             val deadline = System.nanoTime() + 5_000_000_000L
@@ -53,6 +69,14 @@ class DiagnosticExportUiTest {
             assertTrue(descendants(saved.window!!.decorView).filterIsInstance<TextView>()
                 .any { it.text.contains(file.absolutePath) })
             assertTrue(file.readText().contains("Android 9 / API 28"))
+            assertTrue(file.readText().contains(usbReport))
+            assertTrue(file.readText().contains(directReport))
+            assertTrue(file.readText().contains(mappingReport))
+            assertTrue(file.readText().contains(activeConfigurationReport))
+            assertTrue(file.readText().contains(branchReport))
+            assertTrue(file.readText().contains(transitionReport))
+            assertTrue(file.readText().contains(configurationReport))
+            assertTrue(file.readText().contains(claimReport))
             saved.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
             shadowOf(Looper.getMainLooper()).idle()
             val viewer = ShadowAlertDialog.getLatestAlertDialog()

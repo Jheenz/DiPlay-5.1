@@ -853,11 +853,15 @@ The fingerprinted extracted Settings APK actually defines:
 | `com.neusoft.appleservice.ApplePrivate` | Java class extends `Object`; `<clinit>()` `0x19c2b8`, instruction `+0x0009`: `System.loadLibrary("ApplePrivate_jni")`; no branch or exception handler | **Unconditional on first class initialization**. `init()` (`0x19bfc4`) creates an absent singleton; constructor (`0x19c2e4`) calls `applePrivate_native_init()`. The embedded `AppleService.onCreate()` calls this before initializing `AppleInterface`. |
 | `com.neusoft.appleservice.AppleService` | Java class extends `android.app.Service`, implements `Runnable`; code item `onCreate()` `0x19d29c` initializes ApplePrivate, sets mode, initializes AppleInterface, subscribes to native authentication/death events and USB observers | Depends on both external JNI implementations and system/hidden Android facilities, not self-contained Java. **Not declared as a service in the supplied Settings manifest**. No runtime invocation was performed to test it. |
 
-The three Java definitions and related support classes reside in Settings' single
-DEX; the same APK has **no native `.so` entries**. `ApplePrivate.setInterface(int)`
-also relies on hidden network-management APIs; `AppleService` uses `UEventObserver`.
-Thus "class present" does not mean "self-contained", installed standalone package,
-working native transport or a safely callable getter. No fallback library name,
+The Wheeljack Settings APK contains these definitions in its DEX and has **no
+native `.so` entries**. Phase 3B.7 also found bytecode copies of
+`AppleInterface`, `ApplePrivate`, `AppleService` and `BootCompletedReceiver` in
+the setting-widget APK; it too has no native `.so` entries. These are duplicated
+Java wrappers/service code, not evidence of a separately installed or runnable
+Apple service. `ApplePrivate.setInterface(int)` also relies on hidden
+network-management APIs; `AppleService` uses `UEventObserver`. Thus "class
+present" does not mean "self-contained", installed standalone package, working
+native transport or a safely callable getter. No fallback library name,
 alternate native implementation or usable iAP2 transport is proven.
 
 Verified caller conditions:
@@ -891,11 +895,13 @@ The exact literal has these verified uses in the complete Settings DEX:
 
 Separately, `com.neusoft.appleservice.*` is the Java namespace of the embedded
 ApplePrivate/AppleService/AppleDevice/BootCompletedReceiver classes. A Java
-namespace is not Android package registration. The Settings manifest package is
+namespace is not Android package registration. The Wheeljack Settings manifest package is
 `com.neusoft.optimus.wheeljack.setting`; it contains no AppleService or
 Apple BootCompletedReceiver registration and no exact action filter for
-`com.neusoft.appleservice`. Therefore this is an embedded SDK/legacy/external
-target reference, **not proof of an actual installed Android package or service**.
+`com.neusoft.appleservice`. The setting-widget manifest likewise has no
+AppleService or Apple BootCompletedReceiver registration. Therefore this is an
+embedded SDK/legacy/external target reference, **not proof of an actual installed
+Android package or service**.
 Given the real-car NameNotFound result, the old target is unavailable to this
 app on this unit. Whether it is a disabled/removed firmware feature, optional
 product variant or renamed implementation is unresolved; discovery must not
@@ -920,6 +926,94 @@ invoked or vendor/native library explicitly loaded. Optimization files may be wr
 only in DiPlay's private code cache. Missing dependencies, unreadable APKs, unavailable
 DEX APIs or linkage errors are reported; no hidden-API/classloader bypass is used.
 The class list is bounded and ART-reported entries are not an exhaustive decompilation.
+
+### Phase 3C.3A — Android 5.1 direct USB compatibility
+
+This phase ports the existing wired USB path to the Android 5.1 / API 22 platform
+without enabling its runtime connection gate. It does not connect to an iPhone,
+perform MFi authentication, activate Bluetooth/NForetek/QDrive, or alter the
+existing Phase 1/2/3 launch behavior.
+
+**API 22 incompatibilities addressed**
+
+- `UsbRequest.queue(ByteBuffer)` and timed `UsbDeviceConnection.requestWait(long)`
+  are used only on their supported API levels. `UsbTransferCompatibility` dispatches
+  to the API 22 `queue(ByteBuffer, int)` and blocking `requestWait()` overloads.
+- API 22 has no timed `requestWait()`. The compatibility helper schedules cancellation
+  for a blocked request, drains the cancelled request with the blocking wait, and
+  reports timeout separately from a session close. Closing a session cancels a pending
+  read and closes the USB connection to unblock the wait.
+- Before API 28, individual bulk transfers are capped at 16,384 bytes. Logical writes
+  are split into bounded transfers and continue across positive partial-write results;
+  a no-progress/error result is returned so the caller cannot mistake a truncated
+  USBMUX packet or NCM NTB for a complete write.
+- Lockdown Base64 now uses Android `Base64` through `Base64Compat` rather than
+  `java.util.Base64`, which is not an Android framework API on API 22. Standard
+  no-wrap encoding, whitespace-tolerant decoding, and 64-character PEM line wrapping
+  are preserved. No certificate, key, PairRecord or authentication check was changed.
+- UTC timestamp encoding in the wired iAP2 location client now uses `Calendar`
+  rather than API 26 `java.time`. USB permission PendingIntent flags omit
+  `FLAG_IMMUTABLE` on API 22 and retain it on API 23+.
+- Lockdown TLS no longer invokes API 24's endpoint-identification setter on API 22;
+  the explicit `null` setting is retained behind an API 24+ check, while the legacy
+  engine default remains unset.
+
+**USB fragmentation and reassembly**
+
+- USBMUX reads are bounded per transfer; the existing `UsbMuxFrameBuffer` retains
+  incomplete frames and emits only complete logical packets when later USB fragments
+  arrive. Outbound logical data uses bounded/partial-safe writes.
+- NCM bulk reads use an API-level-bounded request buffer. `Ntb16StreamDecoder`
+  incrementally reconstructs complete NTB16 blocks across reads, accepts coalesced
+  blocks and the USB short-packet pad, and passes only complete blocks to the NTB
+  parser. Its bounded accumulation accommodates the full 16-bit NTB length and
+  optional pad; it does not truncate a block to one API 22 read.
+- No USB device or iPhone was used. API 22 wait/cancellation policy was exercised
+  with fake backends; Robolectric in this repository does not provide SDK 22, so the
+  Android Base64 behavior test runs at SDK 23. The compatibility decisions themselves
+  are tested with API level 22 inputs.
+
+**Remaining API and verification status**
+
+The wired-path scan found no remaining unguarded API-above-22 calls in the audited
+USBMUX, Lockdown, iAP2, NCM, VPN and AirPlay path. Newer USB overloads are confined
+to the guarded compatibility helper; `java.time` and wired-path `java.util.Base64`
+uses are removed. API 22 continues to be the app minimum. A `java.util.Base64`
+reference remains in the separate ADB-key utility, outside the wired CarPlay path
+and intentionally unchanged in this phase.
+
+Added tests cover legacy USB queue sizing and fake blocking-wait timeout/close,
+16 KiB chunking and partial writes, USBMUX fragmentation at 1, 16,383, 16,384,
+16,385, 32,768, 65,535 and 65,536-byte frame sizes, fragmented/coalesced NTB16
+blocks, Base64 vectors, and existing iAP2 protocol/control behavior. Additional
+regressions exercise remote MFi client behavior, AirPlay video configuration,
+ADB, cluster-song and iAP2 location tests. The selected unit-test run passed:
+**92 tests, 0 failures, 0 errors, 0 skipped**.
+
+The expanded `:common:testDebugUnitTest :shared:testDebugUnitTest` run was not
+green: **1,414 tests ran, 43 failed** (42 in common settings/USB-filter test
+classes and one unrelated DiLink 3 cluster-recovery test). These failures are
+outside the changed wired-transport tests; they were not modified as part of this
+phase. The targeted compatibility/regression selection above remains green.
+
+`.\gradlew.bat :mobile:assembleDebug` completed successfully. The APK is a build
+artifact only; `minSdk` remains 22 and `LegacyLaunchBuild.CONNECTIONS_ENABLED`
+remains `false`. The existing phase diagnostics flags remain as configured; the
+separate Phase 3B transport-test flag remains `false`.
+
+Android Lint reports that the shared module as a whole is not clean
+(**61 errors and 58 warnings**), with failures including Bluetooth permission
+diagnostics and API-level findings outside this wired path (for example, the
+separate ADB-key utility's `java.util.Base64`). The report contains no remaining
+API-level findings in the audited USBMUX/Lockdown/iAP2/NCM/VPN/AirPlay path after
+the API 22 fixes; the API 26 USB overloads are intentionally isolated in the
+compatibility helper's newer-API branch.
+
+**Not resolved by this phase:** legitimate MFi authentication credentials/provider,
+end-to-end API 22 device validation, behavior of the target iPhone's USB
+re-enumeration/configuration selection, and successful CarKit/iAP2/NCM/AirPlay
+session establishment. No authentication workaround was added. The next authorized
+step remains a separately reviewed Phase 3C.3B; this phase does not enable or start it.
 A loadable public method is not permission to call it remotely. Reflection alone could
 not prove whether `BtManagerService` delegates to the NForetek API; the subsequent
 supplied-APK bytecode audit above establishes that relationship.
@@ -944,6 +1038,363 @@ Phase 3A, safe startup and Phase 3B.1 observation are preserved. No adapter enab
 pair/unpair, scan, SPP/RFCOMM, iAP2, authentication, full CarPlay or BYD integration is
 enabled. Exact descriptors/permissions/loadable methods and usable transport remain
 real-car evidence to collect; Phase 3C is not authorized.
+
+### Phase 3B.6 — Native Geely CarPlay static audit
+
+This audit covers the locally exported
+`apple-discovery-com.neusoft.ecarx.settingwidget-base.apk`,
+`apple-discovery-com.android.launcher3-base.apk`, and
+`com.neusoft.optimus.wheeljack.setting-base.apk`, plus the narrowly scoped
+AutoKit integration reference
+`apple-discovery-cn.manstep.phonemirrorBox-base.apk`. APK manifests and DEX
+bytecode were inspected on the PC; no APK code or native library was run. The
+three Geely APKs contain no `lib/**` entries. The prior real-car inventory and
+the Phase 3B.5b discovery procedure are described above. Conclusions below are
+limited to those files and that inventory, not every possible firmware image.
+
+#### Findings against the nine Phase 3B.6 questions
+
+1. **What `CarPlaySwitch` controls.** In the setting-widget APK it is widget
+   function ID `4`. Its click is dispatched to
+   `SettingWidgetService.turnToCarPlay(boolean)`, which updates the widget's
+   enabled/on state, writes Android `Settings.System["CarplayMode"]` (`2` for
+   on, `3` for off), and asynchronously calls
+   `AppleInterface.setDefaultMode(...)`. This is a native CarPlay mode/start-stop
+   control path, not merely a cosmetic preference. The call path depends on
+   the Apple JNI library; it is not evidence that the operation can complete on
+   this vehicle. Do not click it as a test.
+2. **Complete implementation or remnants.** The examined firmware artifacts
+   show Java wrappers, USB-observer/service code, a mode widget and launcher
+   status/UI hooks, but not a complete runnable native stack. The launcher
+   `CarPlayReceiver` consumes `com.neusoft.ca.carplay.runningstate` and
+   `com.neusoft.apple.device.disconnected` state signals to update launcher
+   presentation; that is not a projection engine. The embedded
+   `com.neusoft.appleservice.AppleService` class is not declared as a service in
+   the supplied Settings manifest. A previous on-device package query returned
+   `NameNotFoundException` for `com.neusoft.appleservice`. This is evidence of
+   an incomplete/remnant path in the collected installation, not proof that
+   every product firmware lacks an optional or differently packaged stack.
+3. **Components not found in the collected scope.** The wrappers request
+   `AppleCore_jni` and `ApplePrivate_jni` unconditionally through
+   `System.loadLibrary`; neither library is packaged in the examined APKs or
+   present in the prior named-library device search. The previous package query
+   did not find the expected `com.neusoft.appleservice` package, and the
+   embedded `AppleService` is not manifest-registered in the Settings APK.
+   Consequently the JNI implementations (including the native method bodies),
+   and a resolvable/registered Apple service host, are the concrete missing
+   pieces. A working iAP2/MFi authentication engine and usable projection
+   transport are also not established. These statements mean “not found or
+   not established in the inspected scope,” not a claim that every system,
+   vendor, 32-bit or product-variant location was exhaustively searched.
+4. **Expected origin of the Apple libraries/service.** DEX identifies only
+   the bare loader names `AppleCore_jni` and `ApplePrivate_jni`; it contains no
+   alternate name or absolute path. Normal Android class-loader/linker
+   resolution therefore expects matching native libraries in the loading
+   package's native-library path or an applicable system linker path. The
+   Java `AppleService`/`BootCompletedReceiver` references an external
+   `com.neusoft.appleservice` package/service target, but no APK or exact
+   library producer can be attributed from the inspected artifacts. The
+   expected supplier is unresolved; the earlier 64-bit-only negative search
+   is not exhaustive.
+5. **Direct USB evidence.** Yes, there is material evidence for a wired
+   device path: the embedded Apple service observes USB UEvents, derives a
+   `/dev/` device path, queries `USBInfo.isCarPlaySupport()` and
+   `switchDeviceMode()`, and the Apple-private wrapper can enable/disable
+   `usbncm0` through a hidden network-management API. This supports an
+   intended USB-host/NCM path, consistent with iPhone → USB → iAP2 → CarPlay.
+   It does not demonstrate a successful iAP2 exchange, authentication or
+   working projection on this unit.
+6. **Native wireless CarPlay evidence.** No complete wireless path was found.
+   `CARPLAY_REV_STS_IAP2_CMD`, Apple authentication hooks,
+   `NCM_AUTO_UP_DOWN`, `isCarPlay_support` and
+   `persist.neusoft.Apple.mode` are names/hooks, not a verified Bluetooth
+   pairing-to-Wi-Fi session flow. The audited Apple code did not establish a
+   Bonjour/AirPlay transport, wireless iAP2 session or CarPlay media session;
+   no literal `MFi`/`mfi` string was found in the inspected DEX files.
+   The already-proven vehicle hotspot and cross-device mDNS are useful network
+   plumbing, but are DiPlay/vehicle-network evidence, not proof of OEM Apple
+   wireless transport. No explicit model/region gate was identified in these
+   APKs; values returned by native/configuration dependencies and other
+   firmware-specific gates remain unknown.
+   The adjacent `IPOD_START_LOCATION_INFO`,
+   `IPOD_STOP_LOCATION_INFO`, `IPOD_START_VEHICLE_STATUS_UPDATE`,
+   `IPOD_STOP_VEHICLE_STATUS_UPDATE` and `IPhoneBookCallBack` declarations
+   are vehicle-status/phonebook API names, not evidence of an iPod/iPhone
+   projection transport.
+7. **Bridge to GEELY_BT/NForetek.** No functioning bridge is verified.
+   Wheeljack contains a `CarPlayFeature.SetBluetoothIDs(byte[])` helper, but
+   the DEX search found no caller. It also contains a conditional
+   `BluetoothService$9.onSppAppleIapAuthenticationRequest(String)` callback
+   that prepares a fixed seven-byte reply and would call
+   `INfCommandSpp.reqSppSendData()` if an SPP interface were present. The
+   standard Bluetooth-service lifecycle does not bind the SPP service, and
+   the installed NForetek SPP implementation's methods are no-op/false; its
+   lifecycle can affect the shared backend. This is a dormant hook, not a
+   viable Apple byte transport. The vehicle's real Bluetooth stack is
+   NForetek `GEELY_BT`; Android `CAR_BT` is separate and is not evidence of an
+   Apple bridge. Do not bind or exercise SPP.
+8. **Safe next head-unit test.** Run the existing manual Phase 3B.5b
+   read-only Apple implementation discovery/inventory while parked, then stop
+   and inspect only its exported APKs, package metadata, native-library
+   directories and both 32/64-bit roots on the PC. This is the smallest safe
+   check for a renamed/variant package or library missed by the prior
+   name-specific, 64-bit search. Do not launch the Apple dialog, click the
+   widget, bind/start services, broadcast, load libraries, use SPP, alter USB
+   roles, or connect/authenticate an iPhone. See the matching procedure in
+   `TESTING.md`.
+9. **Shortest realistic dongle-free route.** First use that inventory to
+   locate the complete, compatible OEM Apple native/service implementation
+   from a legitimate matching firmware package, if it exists. Do not activate
+   it until a separate, explicitly authorized hardware-test phase. If it is
+   absent, DiPlay needs its own direct iPhone transport: direct USB host is a
+   possible development path, while the target requires direct Bluetooth
+   iAP2/control plus a Wi-Fi CarPlay network/media session and a legitimate
+   authentication/certification path. Existing hotspot/mDNS evidence reduces
+   uncertainty only in network setup. The target is a direct iPhone-to-head-unit
+   connection: no Carlinkit, AutoKit or external projection dongle is required
+   or part of the architecture.
+
+#### Steering-key and AutoKit boundaries
+
+The exact `com.neusoft.HardKeyAidlInterface` name was not found in the three
+Geely DEX files, so its owning package, methods and callbacks remain
+unidentified. Wheeljack does contain the distinct ECARX SDK
+`com.ecarx.sdk.input.hardkey.IHardKeyAPI` declaration
+(`registerCallback`, `requestInterceptHardKeys`, `unregisterCallback`) and
+`IHardKeyCallback` short-click/long-press methods. The inspected Wheeljack
+DEX declares the API accessor but contains no verified accessor call or
+callback registration; it is not evidence that this is the requested Neusoft
+AIDL. AutoKit's visible main DEX is a `StubApp` loader; its decoded
+`HWTouch.dex` has touch down/move/up helpers using reflected
+`InputManager.injectInputEvent`. The packed AutoKit payload prevents a
+confident whole-app negative search for the exact AIDL, and the touch helper
+does not identify its owner. No proprietary adapter protocol was investigated.
+
+**Static-audit boundary:** no CarPlay setting/flag was changed; no dialog was
+opened; no vendor service was bound or started; no broadcast was sent; no
+native library was loaded; no USB role or Bluetooth state was changed; no
+iPhone was connected/authenticated; and no Phase 3C work was performed.
+`vendor-apks/` remains local and gitignored.
+
+### Phase 3B.7 — Complete native Geely CarPlay stack discovery
+
+#### Scope and evidence boundary
+
+This phase rechecked the six locally available APK DEX files and manifests:
+Launcher3, settingwidget, Wheeljack Settings, AutoKit, NForetek Bluetooth API
+and the Neusoft BT phone backend. The three Geely APKs contain no native `.so`
+entries. Static tools inspected APK contents only; no APK or library was
+executed. `adb devices -l` returned no attached device during this phase, so
+there was no new search of raw `/system`, `/vendor`, framework JARs or installed
+package `nativeLibraryDir` locations. The repository has no second firmware
+dump/APK set. The earlier device inventory and negative exact-package query
+remain evidence, but the earlier named-library search was not a recursive,
+all-ABI partition audit.
+
+The existing manual discovery collector covers installed-package metadata,
+their APKs and selected library roots; it does not recursively scan all raw
+system/vendor APKs and JARs for DEX strings, nor inspect all requested
+framework locations. Accordingly, absence below means "not found in the
+identified evidence scope", not a claim that every partition of this firmware
+has been exhausted. No new ordinary files were collected in this phase; there
+are no new source-path/destination/size/hash records to report.
+
+#### Missing-component classification
+
+| Item | Classification | Evidence and limit |
+| --- | --- | --- |
+| `AppleCore_jni` | REFERENCED BUT MISSING | `AppleInterface.<clinit>()` unconditionally calls `System.loadLibrary("AppleCore_jni")` in both Wheeljack Settings and settingwidget. No matching `.so` is in either APK; it was not found by the prior named-library device search. Raw system/vendor paths were not re-scanned in this phase. |
+| `ApplePrivate_jni` | REFERENCED BUT MISSING | `ApplePrivate.<clinit>()` unconditionally calls `System.loadLibrary("ApplePrivate_jni")` in both APKs. Same scope limit as above. |
+| `AppleInterface` | PRESENT WRAPPER ONLY | Java singleton and native declarations exist in both APK DEX files. `setDefaultMode(int)` forwards to `appleCore_native_setDefaultMode(int)`; no JNI implementation was found. |
+| `ApplePrivate` | PRESENT WRAPPER ONLY | Java singleton, USB/device-mode helpers and native declarations exist in both APK DEX files; the JNI implementations are not present in those archives. Hidden network-management calls are also required by the USB/NCM path. |
+| `AppleService` | DORMANT / UNREGISTERED | Java service implementation and its initialization logic are embedded in both DEX files. Neither inspected Geely APK manifest registers it or the embedded Apple boot receiver. The earlier package inventory also returned `NameNotFoundException` for package `com.neusoft.appleservice`. |
+| `com.neusoft.appleservice` | REFERENCED BUT MISSING | Embedded constants/boot code refer to it as an intent action and explicit package target; the earlier installed-package query did not resolve it. This is not a present runnable service package in that inventory. |
+| `usbncm0` | UNKNOWN | The wrappers contain code to configure the NCM interface; the current kernel interface/device state and successful network setup were not observed. |
+| Authentication / MFi / iAP / iAP2 engine | REFERENCED BUT MISSING | Java service callbacks and Apple/native hooks indicate intended authentication/device handling, but no complete iAP2 handshake/engine, MFi authentication payload or working authentication component was established in the inspected APKs. |
+| Launcher CarPlay state broadcasts | PRESENT AND IMPLEMENTED | Launcher3 declares `CarPlayReceiver` and handles `com.neusoft.ca.carplay.runningstate` and `com.neusoft.apple.device.disconnected` for launcher state/presentation. The disconnected action is also embedded in the Apple service code in settingwidget and Wheeljack. These are state/UI signals, not a projection or transport implementation. |
+| `Settings.System["CarplayMode"]` | PRESENT AND IMPLEMENTED | Setting-widget and Wheeljack DEX read/write the key and observe its URI. The key is connected to Java UI state and explicit native-wrapper call paths, but a raw setting write by itself is not proven to start a complete Apple engine. |
+
+The classes being duplicated across two APKs does not supply either missing JNI
+library. `AppleService` code attempts to initialize both wrappers, configure
+mode and subscribe to authentication/death/USB events, but the service is
+unregistered in the inspected manifests and its native dependencies remain
+unresolved. Thus a complete runnable native CarPlay engine is not present in
+the collected APK set.
+
+#### JNI load path and callers
+
+Both APK copies use bare `System.loadLibrary` names from the respective
+`AppleInterface` and `ApplePrivate` class initializers. No alternate library
+name, absolute path, custom `ClassLoader`, `DexClassLoader`, explicit
+`nativeLibraryDir` load, or Java-side cross-process/preload mechanism was found.
+Under normal Android resolution, each call uses the class loader for the APK
+that defines the class and Android's applicable linker search paths. Static
+evidence does not identify a separate supplier APK, process or linker
+configuration; therefore the original expected package/path for these files
+remains unknown. A bare library name alone does not prove the files had to be
+stored in `/system/lib*`.
+
+The two DEX copies declare the same native method names. `AppleInterface`
+declares `appleCore_native_appledevice_connected`,
+`appleCore_native_attachServer`, `appleCore_native_callStateUpdate`,
+`appleCore_native_detachServer`, `appleCore_native_exit`,
+`appleCore_native_favoriteListUpdate`, `appleCore_native_getAppName`,
+`appleCore_native_getArtworkInfo`, `appleCore_native_getConfig`,
+`appleCore_native_getDeviceName`, `appleCore_native_getFavoriteListCount`,
+`appleCore_native_getNowPlayingInfo`, `appleCore_native_getPlayStatus`,
+`appleCore_native_getPlayTime`, `appleCore_native_getPlayingList`,
+`appleCore_native_getPowerInfo`, `appleCore_native_getRecentListCount`,
+`appleCore_native_getRepeatMode`, `appleCore_native_getShuffleMode`,
+`appleCore_native_getUSBInfo`, `appleCore_native_init`,
+`appleCore_native_playAllSong`, `appleCore_native_playCollection`,
+`appleCore_native_playUidList`, `appleCore_native_powerSourceUpdate`,
+`appleCore_native_recentListUpdate`, `appleCore_native_requestAppLaunch`,
+`appleCore_native_sendLocationInfo`,
+`appleCore_native_sendPlaybackRemoteCmd`,
+`appleCore_native_sendVehicleStatus`,
+`appleCore_native_setDefaultMode`,
+`appleCore_native_setNowPlayingInformation`,
+`appleCore_native_startMediaLibraryUpdate` and
+`appleCore_native_stopMediaLibraryUpdate`.
+`ApplePrivate` declares `applePrivate_native_appledevice_connected`,
+`applePrivate_native_attachServer`, `applePrivate_native_close`,
+`applePrivate_native_detachServer`, `applePrivate_native_exit`,
+`applePrivate_native_getUSBInfo`, `applePrivate_native_init`,
+`applePrivate_native_open`, `applePrivate_native_setMode`,
+`applePrivate_native_startAudio`, `applePrivate_native_stopAudio`,
+`applePrivate_native_switch_device_mode` and
+`applePrivate_native_switch_host_mode`. These declarations cover media,
+device, audio, vehicle and USB/NCM operations; they are JNI interfaces, not
+implementations. Their native bodies remain missing from the inspected APKs.
+
+The wrapper method `AppleInterface.setDefaultMode(int)` is Java, returns `int`,
+and directly delegates to the native `appleCore_native_setDefaultMode(int)`.
+The native method body is unavailable. The app call sites found are
+`SettingWidgetService$4.run()` and `CarPlayDialog$4.run()`; initialization and
+singleton access also occur in `SettingWidgetService.turnToCarPlay`,
+`CarPlayDialog.onCreate`, the embedded `AppleService.onCreate` and the embedded
+boot receiver. The latter service/receiver are not registered in the inspected
+manifests. No named Java mode constants define the native parameter's meaning.
+Callers use `0`/`1` or derive a bit-flipped value from current UI state, which
+strongly suggests a default-mode/enable selection; whether native code treats
+it as CarPlay enablement, accessory/projection mode or another setting is
+UNKNOWN. There is no evidence that it changes USB role or launcher mode.
+
+`ApplePrivate` is initialized and called by the embedded Apple service code;
+no independent, manifest-reachable ApplePrivate service client was established.
+`AppleInterface` calls are in the widget toggle, Settings CarPlay dialog and
+embedded service/boot initialization paths. The unguarded class initializers
+mean these are not safe availability probes.
+
+#### `CarplayMode` readers and writers
+
+| APK / package | Class and method | Access | Values / observed effect |
+| --- | --- | --- | --- |
+| settingwidget / `com.neusoft.ecarx.settingwidget` | `SettingWidgetService.turnToCarPlay(boolean)` | Write | Writes `2` for the switch's on path and `3` for off, updates widget state and explicitly initializes/accesses `AppleInterface`; it schedules the `SettingWidgetService$4` runnable which calls `setDefaultMode`. |
+| settingwidget | `SettingWidgetService$2.handleMessage` | Write | Writes the switch's corresponding `2`/`3` state in its two handler branches. |
+| settingwidget | `SettingWidgetService.getCarPlayState()` | Read | Reads the setting (default `0`) to derive widget state. |
+| settingwidget | `SettingWidgetService$3.onChange()` | Read | Reads the setting after its URI changes and updates widget state; it does not itself call the native setter. |
+| settingwidget | `Utils.<clinit>()` | Observer URI | Creates the `Settings.System` URI for `CarplayMode`; this is registration metadata, not a value read/write. |
+| Wheeljack / `com.neusoft.optimus.wheeljack.setting` | `ConnectHomeFragment$DataObserver` constructor and `onChange()` | Observe, read | Registers for the setting URI; `onChange()` reads with default `0` and updates the connect-screen mode state. |
+| Wheeljack | `CarPlayDialog.initCarMode()` | Read | Reads with default `0` and initializes the CarPlay/CarLife radio-button UI. |
+| Wheeljack | `CarPlayDialog$CarModeObserver` constructor; `CarPlayDialog$1.handleMessage()` | Observe, read | The constructor registers the setting URI; the handler re-reads the value to refresh dialog mode/UI. |
+| Wheeljack | `CarPlayDialog$3.onClick()` | Write | The two mode-choice branches write `2` or `3`; the dialog presents CarPlay and CarLife choices. These are mode values in this dialog, not a universal Boolean interpretation. |
+
+The stock code does not support classifying `CarplayMode=2` as *only* a
+cosmetic UI value: the widget's explicit user-action method couples its write
+to Apple wrapper initialization and a native `setDefaultMode` call. Conversely,
+the setting itself is not proven to be a global activation flag: its observers
+refresh UI state, the dialog uses `2`/`3` as CarPlay/CarLife choices, and no
+separate system component that initializes the Apple engine solely upon an
+arbitrary setting write was found. The safest exact description is a shared
+mode/state setting used by UI code that separately invokes native control code.
+
+#### Cross-reference, transport and gating findings
+
+| Reference family | Local occurrence and interpretation |
+| --- | --- |
+| `CarPlayReceiver`, `com.neusoft.ca.carplay.runningstate`, `com.neusoft.apple.device.disconnected` | `CarPlayReceiver` and both action filters are in Launcher3. `com.neusoft.apple.device.disconnected` also appears in the embedded Apple service code in settingwidget and Wheeljack. The actions signal state/disconnection; they do not implement transport. |
+| `CarPlaySwitch`, `CarplayMode` | Setting-widget function ID 4 to `turnToCarPlay`; Wheeljack dialog and observers also read/write the setting as described above. |
+| `AppleInterface`, `ApplePrivate`, `AppleService`, `com.neusoft.appleservice` | Wrapper and embedded service classes are in both settingwidget and Wheeljack DEX; the expected installed service package was absent in the prior package inventory and the inspected manifests do not register the embedded service/boot receiver. |
+| `AppleCore_jni`, `ApplePrivate_jni` | Unconditional bare-name load calls in both APK copies; no corresponding library in the APK archives or prior named-library search. |
+| `usbncm0`, `NCM_AUTO_UP_DOWN`, USB/UEvent/`USBInfo`/device-mode | USB/NCM implementation hooks in Apple wrapper/service code. This supports an intended wired path, not proof of a complete host, iAP2, authentication or projection session. |
+| `MFi`, `iAP`, `iAP2`, authentication | Authentication-related callback/native hooks and an iAP2 command-name hook exist, but no complete Java implementation, legitimate MFi authentication payload or working iAP2 exchange was identified. No MFi literal/engine was found in the inspected DEX. |
+| `SetBluetoothIDs`, `CarPlaySetBluetoothIDs` | `CarPlayFeature.SetBluetoothIDs(byte[])` and its `"CarPlaySetBluetoothIDs length err:"` diagnostic are in settingwidget and Wheeljack; no caller was found. No effective Apple-to-NForetek bridge was established. |
+| `iphone`, `ipod`, `bonjour`, `airplay`, projection | iPhone/iPod-named status/vehicle-information declarations (including `IPOD_*_LOCATION_INFO`, `IPOD_*_VEHICLE_STATUS_UPDATE` and `IPhoneBookCallBack`) do not establish projection. No complete Bonjour/AirPlay session path or native projection engine was found in the inspected Geely APKs. |
+| `com.neusoft.HardKeyAidlInterface` | Exact interface name not found in the six local APK DEX files. Wheeljack contains a distinct abstract Java API: `IeCarXAPI.getHardKeyApi()` returns `IHardKeyAPI`; that interface declares `registerCallback(IHardKeyCallback)`, `requestInterceptHardKeys(KeyCode[]) -> boolean`, and `unregisterCallback(IHardKeyCallback)`. The callback has `onKeyLongPress(KeyCode)` and `onKeyShortClick(KeyCode)`, both returning boolean; the included `KeyCode` enum contains only `MEDIA_NEXT` and `MEDIA_PREVIOUS`. No accessor invocation, callback implementation/registration or key mapping was found. These classes do not identify the owner or Binder descriptor of the separately requested Neusoft interface. |
+
+The embedded USB/UEvent and NCM helpers are direct evidence for an intended
+USB accessory path: iPhone → USB → Apple/iAP2 handling → CarPlay. The iAP2,
+MFi authentication and full session portions are not proven. No completed
+wireless chain was found: there is no verified NForetek/`GEELY_BT` iAP2 control
+bridge, no stock Bluetooth-to-hotspot session orchestration and no native
+Bonjour/AirPlay media path in the inspected APKs. The already-proven vehicle
+hotspot and cross-device mDNS are network facts, not an OEM CarPlay transport.
+The conditional SPP authentication callback remains a dormant hook; do not use
+`NfServiceSpp`.
+
+No explicit region/country/model/E01/VX11/product-code gate was found in the
+inspected DEX. The mode dialog reads `persist.neusoft.Apple.mode` (including a
+`CarLife` comparison), and the wrappers expose native configuration and
+`USBInfo.isCarPlaySupport()` checks. These are leads for mode/capability
+gating, not proof of a region or vehicle gate; their native/config values could
+not be evaluated. Missing package/JNI payload is the strongest evidenced
+blocker in the collected scope. Hardware and licensing/authentication status
+remain unresolved.
+
+No alternate Geely/ECARX E01 firmware is present in the repository. An offline
+comparison would require a verified E01, preferably VX11/Okavango-family,
+firmware build known to include native wired CarPlay, with its build/model/
+region metadata and readable `/system` and `/vendor` app, priv-app, framework
+JAR and native-library contents. No external firmware was downloaded.
+
+#### Direct answers
+
+1. **Complete native implementation? — STRONG EVIDENCE: no complete runnable
+   implementation is established in the supplied installation artifacts.**
+   Wrappers, mode UI, launcher state hooks and USB/NCM service code exist.
+2. **What is missing? — PROVEN within the inspected APK scope:** both JNI
+   implementations are absent from the APKs; the expected installed
+   `com.neusoft.appleservice` package was absent in the earlier package query;
+   the embedded service is unregistered in inspected manifests. **UNKNOWN:**
+   whether a renamed/optional native payload exists elsewhere on this firmware.
+   No complete iAP2/MFi/authentication engine or CarPlay media/session
+   transport was found.
+3. **Is `CarplayMode=2` an activation flag? — STRONG EVIDENCE:** it is a mode/
+   state input, not a standalone global activation flag. The stock switch's
+   action separately writes it and invokes native wrapper control; dialog and
+   observers also use it for UI mode state.
+4. **What does `setDefaultMode()` do? — PROVEN:** Java wrapper forwarding to
+   `appleCore_native_setDefaultMode(int)`, returning its result. **UNKNOWN:**
+   exact native semantics; callers suggest default-mode/enable selection, not
+   USB-role or launcher-mode control.
+5. **Where should the JNI libraries come from? — PROVEN:** the defining APK's
+   normal class-loader/linker resolution for the bare names.
+   **UNKNOWN:** their original supplier APK, system path or preload process;
+   no path or producer is named by DEX.
+6. **Legitimate iAP2/MFi authentication present? — UNKNOWN / not established.**
+   Hooks and callback names are not proof of an authentication implementation;
+   no complete engine or successful exchange is in evidence.
+7. **Direct USB iPhone transport? — STRONG EVIDENCE for intended USB/NCM
+   plumbing; UNKNOWN for a complete authenticated CarPlay session.**
+8. **Native wireless transport? — UNKNOWN, with no complete stock chain found
+   in the inspected APKs.** Do not treat hotspot/mDNS alone as CarPlay.
+9. **Functional bridge to `GEELY_BT`? — STRONG EVIDENCE: none found.** The
+   SPP/authentication callback is conditional and the prior NForetek analysis
+   showed that SPP path is dead/no-op.
+10. **Could another E01 variant contain the payload? — PLAUSIBLE.** No alternate
+    image exists locally, so this has not been compared.
+11. **Single safest next step —** run a complete read-only inventory of the
+    current head unit's ordinary readable system/vendor APK, framework/JAR and
+    native-library files, recording source path, export destination, size and
+    SHA-256. This resolves whether a renamed/optional payload is already on
+    this unit without executing or activating it. If that inventory is
+    negative, the strongest next lead is an offline comparison against a
+    verified wired-CarPlay E01/VX11/Okavango firmware variant.
+
+No mode/settings/feature flag was changed, no service was started or bound, no
+broadcast was sent, no native library was loaded, no USB role was changed and
+no iPhone was connected or authenticated. Phase 3C was not started.
 
 ### Previous Phase 3B.1 inventory
 
@@ -1111,3 +1562,776 @@ See [BYD navigation](BYD_NAVIGATION.md) for the exact verified firmware and life
 Reports record requested and actual frequencies, station association state, fallback failures and remembered-configuration events. Wi-Fi credentials and protocol payloads are excluded. A successful hotspot is not itself a successful CarPlay session.
 
 Android references: [SupplicantState](https://developer.android.com/reference/android/net/wifi/SupplicantState), [explicit P2P operating frequency](https://developer.android.com/reference/android/net/wifi/p2p/WifiP2pConfig.Builder#setGroupOperatingFrequency(int)).
+
+### Phase 3C.1 — QDrive iPhone transport static audit
+
+**Scope:** static PC analysis of `vendor-apks/QDrive_Global/QDrive_Global.apk` and its
+nine ARM libraries. `btphoneNF.apk` and `Bluetooth-GocBtAPI.apk` were inspected only
+to resolve the ECARX/NForetek SPP service ownership. No vendor service was started or
+bound, no library was loaded, no Bluetooth or USB operation was issued, and no iPhone
+was connected or authenticated.
+
+The QDrive package is `com.neusoft.ssp.ces.c4.car.assistant`, version `1.5.0`
+(version code `1005`, min SDK 18, target SDK 27, `armeabi-v7a`). The conclusions below
+use **PROVEN** for direct DEX/manifest/ELF evidence, **STRONG EVIDENCE** for multiple
+matching static indicators without a complete execution trace, **PLAUSIBLE** for an
+interpretation, and **UNKNOWN** where static evidence does not resolve the behavior.
+
+#### Java transport paths
+
+**Direct USB — PROVEN static QDrive iPhone transport path; runtime success was not
+tested, and this is not CarPlay.**
+
+The relevant Java chain is:
+
+```text
+MainSDKService activation/startup path (when IS_ACTIVATE == 0)
+  -> PhoneMux.start(context)
+  -> UsbManager device polling and USB permission request
+  -> PhoneMux.registDevice(device)
+  -> UsbManager.openDevice(device)
+  -> UsbDeviceConnection.getFileDescriptor() and device path
+  -> JNISSPAirPlayUSBSDK.JNI_SSP_AddUsbDevice(fd, devicePath)
+  -> libSSPAirPlayUSB.so
+  -> libusbserver.so / libusb / usbmuxd / Lockdown
+```
+
+`PhoneMux` starts the USB server using `JNI_SSP_StartUsbServer`, polls
+`UsbManager.getDeviceList()`, and filters for Apple vendor ID `0x05ac` and the
+strict product-ID interval `0x1291`–`0x12ae`. It requests Android USB-host permission
+using `com.usbscreen.androidusbmuxd.USB_PERMISSION`; its receiver checks the permission
+result and revalidates the Apple device before opening it. This is Android USB-host
+permission, distinct from iPhone Trust approval.
+
+`libusbserver.so` contains executable usbmuxd/Lockdown code and strings for
+`ReadPairRecord`, `SavePairRecord`, `PairRecord`, `ValidatePair`, `StartSession`,
+`com.apple.mobile.lockdown`, and errors for missing/invalid pairing records. It also
+contains explicit messages for waiting for the user to trust the computer and for
+the user having trusted it. **STRONG EVIDENCE:** first-time pairing expects iOS
+Lockdown trust approval; the exact UI and service opened after `StartSession` were
+not executed or fully resolved.
+
+**Bluetooth/SPP — interfaces and native code exist, but no usable ECARX byte path is
+established.**
+
+QDrive's DEX contains both:
+
+- Legacy `com.ecarx.xui.adaptapi.bt.spp.ISpp`, with readiness/state, connect/disconnect,
+  callback registration, connected-device-list, and `reqSppSendData(String, byte[])`
+  methods. Its callback includes raw-byte receive/send notifications and
+  `onSppAppleIapAuthenticationRequest`.
+- Binder `com.ecarx.xui.adaptapi.bt1.spp.ISpp` and `ISppCallback`, with descriptors
+  matching those interface names. The Binder API carries byte arrays through
+  `reqSppSendData` and `onSppDataReceived`; the callback also declares the iAP
+  authentication-request notification.
+
+The client-side `com.ecarx.xui.adaptapi.bt.BtImpl` creates phone/settings/PBAP/A2DP/
+AVRCP proxies and binds using the action
+`com.neusoft.geely.btphone.service.BtPhoneManagerService`. Its legacy `getSpp()`
+returns `null`. The locally supplied `btphoneNF.apk` (package
+`com.neusoft.geely.btphone.nf`) contains the concrete
+`com.neusoft.geely.btphone.nf.BtManagerService` and
+`IBtPhoneManager` Binder stub; its manifest advertises the distinct action
+`com.neusoft.geely.btphone.control`. Most decisively,
+`BtManagerService$5.getSpp()` returns `null`. Thus the SPP API is present, but this
+local manager implementation does not provide an `ISpp` object. The action mismatch
+also means the QDrive `BtImpl` bind call is not evidence that it reaches this service.
+
+No QDrive application call site was found that obtains a non-null SPP object,
+registers an SPP callback, or sends bytes with `reqSppSendData`. The
+`Bluetooth-GocBtAPI.apk` contains the separate NForetek SPP interface/service surface;
+the previously audited `NfServiceSpp` path is dead/no-op and is not a valid substitute.
+
+Separately, `libSSP_Main.so` has real exported executable functions named
+`SSP_Main_iSPP_Init`, `SSP_Main_iSPP_Connect`, `SSP_MainAPP_iConnectSPP`,
+`SSP_CB_SPP_Connnect_WIFI`, `SSP_CB_SPP_ConnnectState_USB`, and
+`SSP_CB_BTSPP_*`. This is **STRONG EVIDENCE** of QDrive's own compiled SPP-like
+control logic, not just strings. However, the Java native methods
+`JNI_SSP_MainAPP_iConnectSPP` and `JNI_SSP_MainAPP_vStartWifiTcpConnect` have no
+Java call sites in this APK. Their internal native reachability and relationship to
+the ECARX Binder or the vehicle's `GEELY_BT`/NForetek service remain **UNKNOWN**.
+These symbols do not prove a working generic Bluetooth byte transport.
+
+**Wi-Fi and AirPlay — STRONG EVIDENCE for QDLink/mirroring, not CarPlay.**
+
+`MainSDKService` prepares HCLink data and calls
+`SSPMainSDK.JNI_SSP_MainAPP_iStartServer(context)`. It registers native callbacks
+for USB state, Wi-Fi connect/disconnect, connection state, and AirPlay service state.
+`LinkCallBack.SSPMainConnect_wifi(int, int, int)` maps connection status to
+`link_conn_iphone_wifi` or `link_conn_android_wifi` and updates the mirror-data type;
+it is a status callback, not a credential exchange. When the service's activation
+network checks pass, `MainSDKService.checkActivateNetStatus()` calls
+`JNI_SSP_MainAPP_vStartAirplayActivate()`.
+
+The native `libSSP_Main.so` exports a QD Wi-Fi channel with UDP broadcast/search,
+system-info exchange, Wi-Fi/TCP connect, mirror-TCP-port exchange, and separate app/
+mirror receive threads. `libSSPAirPlay.so` depends on `libmediaserver.so`; the latter
+contains RAOP and Bonjour/mDNS AirPlay service strings. This establishes a compiled
+wireless mirroring/AirPlay stack. It does **not** establish wireless CarPlay.
+
+`QDAssistantAPI.requestSendWifiAddress(String)` serializes a string under the
+`WIFIADDRESS` message key and passes it to
+`JNILibCore.Lib_Core_SSPLink_iSendData`. The method has no QDrive DEX call site.
+The payload is named as an address, not an SSID or passphrase; no active credential
+exchange is proven. The Java DEX contains no Wi-Fi client `addNetwork` /
+`enableNetwork` flow. The embedded ECARX `WifiApBean` code manages AP configuration
+and client limits, but is not evidence that QDrive provisions an iPhone's Wi-Fi
+credentials.
+
+The DEX does contain the `CarPlay` and `carplay_audio` strings in
+`com.neusoft.optimus.utility.Storage.Constant`. The executable `CarPlay` comparison
+is part of a generic source-name validation alongside radio, USB, Bluetooth audio,
+and video inputs; `carplay_audio` is a constant. No CarPlay session, authentication,
+or native-engine call follows from these strings. They are **REFERENCE ONLY**, not
+evidence that QDrive implements CarPlay.
+
+#### Native-library relationships
+
+All nine libraries below are ELF32, little-endian ARM shared objects. `DT_NEEDED`
+edges and representative exported interfaces were checked statically.
+
+| Library | Direct `DT_NEEDED` dependencies | Relevant evidence |
+|---|---|---|
+| `libautoregister.so` | `liblog.so`, `libm.so`, `libdl.so`, `libc.so` | Signature/helper dependency of the USB and main SSP libraries; not an Apple authentication engine. |
+| `libhmi_for_hclink.so` | `liblog.so`, `libGLESv2.so`, `libjnigraphics.so`, `libOpenSLES.so`, `libc.so`, `libstdc++.so`, `libandroid.so`, `libm.so`, `libdl.so` | HCLink display/audio integration dependency of `libSSP_Main.so`; not CarPlay transport. |
+| `libmediaserver.so` | `liblog.so`, `libandroid.so`, `libstdc++.so`, `libm.so`, `libc.so`, `libdl.so` | RAOP/AirPlay and mDNS strings. Contains embedded private-key-looking PEM material; its value is intentionally omitted and the binary should not be republished. |
+| `libSSPAirPlay.so` | `libmediaserver.so`, `liblog.so`, `libc.so`, `libm.so`, `libstdc++.so`, `libdl.so` | JNI media-server wrapper; dependency edge to the AirPlay/RAOP implementation. |
+| `libSSPAirPlayUSB.so` | `libusbserver.so`, `libautoregister.so`, `liblog.so`, `libc.so`, `libm.so`, `libstdc++.so`, `libdl.so` | JNI USB wrapper; imports `UsbScreen_*` functions implemented by `libusbserver.so`, including device add and USB service start. |
+| `libsspLib.so` | `libstdc++.so`, `libm.so`, `libc.so`, `libdl.so` | SSP data serialization helpers; not independently identified as a phone transport. |
+| `libsspLibCore.so` | `liblog.so`, `libstdc++.so`, `libm.so`, `libc.so`, `libdl.so` | JNI `SSPLink` init/send/callback APIs; includes `CProcessClient::SendDataToMainProcess`, so its API alone does not prove a Bluetooth radio path. |
+| `libSSP_Main.so` | `libhmi_for_hclink.so`, `libcrypto.so`, `libssl.so`, `liblog.so`, `libautoregister.so`, `libusbserver.so`, `libc.so`, `libm.so`, `libstdc++.so`, `libdl.so` | JNI entry points, executable SPP-like routines, QD Wi-Fi channel, USB callbacks, and AirPlay activation. The JNI USB wrapper is a separate library path. |
+| `libusbserver.so` | `liblog.so`, `libz.so`, `libm.so`, `libdl.so`, `libc.so` | Exports the USB server API and contains libusb/usbmuxd/Lockdown pairing and session code. No CarPlay/MFi engine was established. |
+
+The QDrive APK's nine-library directory does not include the separate
+`vendor-apks/libipod.so` file, and none of these nine has it in `DT_NEEDED`.
+`ipod_callback`/iPod-related symbols in `libSSP_Main.so` therefore do not prove that
+QDrive loads that separate library. The iPod callback and `vSendiApMirrorMsg2Phone`
+names are not evidence of CarPlay. No native code was executed.
+
+The DEX declares the corresponding library loads: `SSPMainSDK` loads
+`hmi_for_hclink` and `SSP_Main`; `JNISSPAirPlayUSBSDK` loads `usbserver` and
+`SSPAirPlayUSB`; `JNISSPAirPlaySDK` loads `mediaserver` and `SSPAirPlay`;
+`JNILibCore` loads `sspLibCore`; and `SSPProtocol` loads `sspLib`. These are
+QDrive's APK JNI dependencies, not a load path for `libipod.so`.
+
+#### Reuse assessment and limits
+
+| Component | Classification | Assessment |
+|---|---|---|
+| `PhoneMux` USB-host enumeration, permission, and file-descriptor handoff | REIMPLEMENTABLE | A concrete direct-iPhone USB-host pattern, but bound to QDrive's JNI and native server. |
+| `libSSPAirPlayUSB.so` + `libusbserver.so` | QDRIVE-COUPLED | Demonstrates QDrive's direct USB Lockdown/mirroring transport; not a documented DiPlay API or a CarPlay engine. |
+| QD Wi-Fi/UDP/TCP/AirPlay stack | QDRIVE-COUPLED | Useful architecture evidence for direct wireless mirroring; not a CarPlay session implementation. |
+| ECARX `bt1.ISpp` / `ISppCallback` | UNKNOWN / not callable on this local build | Byte-array Binder contract exists, but the local manager returns `null`; no QDrive send/receive call chain. |
+| NForetek `NfServiceSpp` | NOT RELEVANT | Previously established dead/no-op path; do not bind or rely on it. |
+| RAOP/mDNS/AirPlay media server | NOT RELEVANT to CarPlay protocol | Useful only as a QDrive A/V integration reference. |
+| iAP2/MFi/CarPlay authentication and session engine | UNKNOWN / not found | The iAP callback name is only an interface notification. USB Lockdown trust is not MFi authentication. |
+
+**Answers and confidence**
+
+1. **USB transport call chain — PROVEN statically for QDrive mirroring, not runtime
+   success:** `MainSDKService` →
+   `PhoneMux` → Android `UsbManager` permission/open → USB file descriptor →
+   `JNI_SSP_AddUsbDevice` → `libSSPAirPlayUSB.so` → `libusbserver.so` →
+   usbmuxd/Lockdown. It is direct USB, with no Carlinkit adapter in this chain.
+2. **Bluetooth/SPP call chain — UNKNOWN as a working phone transport:** the ECARX
+   Binder contract supports arbitrary bytes, but both the QDrive legacy getter and
+   the local `btphoneNF` Binder implementation return `null`; QDrive has no byte
+   send/receive call site. QDrive's native SPP-like functions are compiled, but their
+   active backend and connection to `GEELY_BT` are not established.
+3. **Wi-Fi/AirPlay call chain — STRONG EVIDENCE:** `MainSDKService` starts/registers
+   `SSP_Main`; the service calls AirPlay activation and receives Wi-Fi/mirror state;
+   `libSSP_Main.so` contains QD Wi-Fi discovery and TCP mirror functions; and
+   `libSSPAirPlay.so` links to the RAOP/mDNS media server. This is QDLink/AirPlay
+   mirroring, not CarPlay. Wi-Fi credential provisioning is **UNKNOWN**.
+4. **JNI/native relationships — PROVEN:** `libSSPAirPlayUSB.so` calls the
+   `UsbScreen_*` API in `libusbserver.so`; `libSSPAirPlay.so` depends on
+   `libmediaserver.so`; `libSSP_Main.so` depends on `libusbserver.so`,
+   `libhmi_for_hclink.so`, and its crypto/TLS dependencies. QDrive's Java code invokes
+   USB-server and AirPlay-activation entry points; the native SPP/Wi-Fi JNI methods
+   noted above have no Java call site in this DEX.
+5. **Was ECARX SPP resolved? — PROVEN:** the local manager owner is
+   `btphoneNF.apk` / `com.neusoft.geely.btphone.nf.BtManagerService`; its concrete
+   `getSpp()` returns `null`. QDrive's old adapter uses a different service action.
+   No separate usable ECARX byte-transport implementation was found.
+6. **CarPlay implementation — STRONG EVIDENCE not present in this QDrive chain:**
+   no CarPlay client/session engine, iAP2/MFi identification/authentication path,
+   CarPlay service orchestration, or proven Java/native-to-vehicle SPP bridge was
+   identified. Its DEX contains only generic CarPlay source labels. QDrive supplies
+   direct iPhone USB Lockdown and AirPlay/QDLink functionality; this does not rule
+   out a separate implementation elsewhere in the firmware.
+7. **Reusable pieces — PROVEN/PLAUSIBLE:** USB enumeration and descriptor handoff
+   are reimplementable. QDrive's native USB and Wi-Fi libraries are
+   QDrive-coupled. None is a drop-in CarPlay transport for DiPlay. The Bluetooth API
+   is not usable through the local manager because it returns `null`.
+8. **Single safest next experiment:** on a parked head unit with **no iPhone
+   connected**, use the already-built Phase 3B.8 manual read-only inventory to capture
+   paths and hashes for the installed QDrive, `btphoneNF`, and
+   `Bluetooth-GocBtAPI` packages and their native-library directories. Stop after
+   collection and compare offline on the PC; do not bind/start services or load
+   libraries.
+
+**Bottom line:** QDrive contains a direct USB-host/usbmuxd/Lockdown path intended for
+QDLink/AirPlay-style functionality; runtime success was not tested. Native Wi-Fi
+mirroring is also strongly evidenced. Neither proves CarPlay. The ECARX `ISpp`
+contract is not functional on the locally inspected `btphoneNF` service because
+`getSpp()` returns `null`; native SPP-like symbols remain unconnected to a verified
+`GEELY_BT` transport. No iAP2/MFi/CarPlay authentication engine was established.
+No runtime transport test was performed.
+
+### Phase 3C.2 — DiPlay CarPlay session + direct USB integration audit
+
+**Scope:** static source review of DiPlay's USB, Lockdown, iAP2, MFi, NCM, AirPlay,
+media, and input paths. No build, test, USB operation, iPhone connection, authentication,
+service launch, or native-library load was performed. QDrive is used only as the Phase
+3C.1 transport reference; its extracted files were not re-audited here.
+
+**Reachability gate:** this is the intended source call graph, not an enabled runtime
+path in the current Geely launch build. `LegacyLaunchBuild.CONNECTIONS_ENABLED` is
+`false`; the host controller's `start()` rejects connection startup, and the manifest
+declares `CarPlayHostActivity` and `DiPlaySessionService` disabled by default. The
+Phase 3B diagnostic surfaces remain distinct from this gated CarPlay runtime.
+
+#### Evidence-based architecture map
+
+Behind that gate, the source describes a wired path with two distinct USB data paths: USBMUX carries
+Lockdown and the CarKit service byte stream; the separate NCM function carries the
+AirPlay IP network. The main source-level flow is:
+
+```text
+CarPlayHostActivity (manual host UI; foreground/session setup)
+  -> CarPlayController.start()
+  -> startMfi() and resolve the configured MFi provider first
+  -> on MFi ready, startPhone()
+  -> discover Apple USB device with UsbManager / request host permission
+  -> if necessary, vendor control request 0x52 and wait for USB re-enumeration
+  -> select the configuration containing USBMUX and NCM
+  -> claim USBMUX bulk interface and open USBMUX session
+  -> open a second USB connection for the NCM control/data interfaces
+     -> select data alternate setting; NcmUsbBridge (NTB16/Ethernet framing)
+  -> runStack()
+     ├─ Iap2UsbMuxHost (USBMUX v2 + minimal TCP stream)
+     │   -> LockdownPairingClient (only on first/unusable pairing record)
+     │      -> normal iOS Lockdown pairing/trust flow
+     │   -> LockdownCarKitClient
+     │      -> Lockdown StartSession + session TLS
+     │      -> StartService("com.apple.carkit.service")
+     │      -> service TLS when requested; return byte stream
+     │   -> Iap2Session / Iap2LinkChannel / Iap2LinkEngine
+     │      -> iAP2 link synchronization, framing, ack/retransmit, sessions
+     │      -> Iap2CsmChannel / Iap2CsmFramer
+     │      -> Iap2WiredControlClient
+     │         -> identification -> MFi auth -> power/subscriptions
+     │         -> CarPlayAvailability -> CarPlayStartSession
+     └─ NcmUsbBridge -> CarPlayVpnService / Ipv6NcmBridge / app-scoped VPN
+         -> AirPlay TCP listener at the configured link-local IPv6 endpoint
+            -> AirPlaySession (RTSP setup, pairing/verify, stream lifecycle)
+            -> CarPlayMediaEngine
+               ├─ screen/audio/iAP DataStream ports -> MediaSink
+               ├─ Android MediaCodec / AudioTrack playback
+               ├─ optional AudioRecord microphone uplink
+               └─ AirPlay HID touch, knob, media and telephony input
+```
+
+MFi provider startup is before iPhone discovery in the wired controller: `start()`
+calls `startMfi()`, and the provider's ready path calls `startPhone()`.
+
+The order is important: Lockdown pairing and service startup are **not** iAP2;
+USBMUX is **not** NCM; and opening `com.apple.carkit.service` is not itself proof
+that the phone accepts DiPlay's later iAP2 identification or CarPlay session. The
+controller opens the CarKit stream, wraps it in `Iap2Session`, attaches the NCM/VPN
+AirPlay path, and then runs wired iAP2 control. `CarPlayStartSession` does not itself
+open the AirPlay transport.
+
+| Layer | Source evidence | Status |
+|---|---|---|
+| **TRANSPORT — USB host** | `IphoneUsbHost` discovers Apple VID `0x05ac`, requests Android USB permission, selects descriptor-based CarPlay configuration, claims interfaces, and implements the vendor request/re-enumeration step described in source. | Implemented in source; not runtime-verified on the E01 in this phase. |
+| **TRANSPORT — USBMUX/Lockdown** | `Iap2UsbMuxHost`, `LockdownPairingClient`, and `LockdownCarKitClient` provide USBMUX v2, a minimal TCP stream, Lockdown pairing, StartSession/TLS, and StartService. | Implemented minimum flow; the iOS Trust prompt is expected for new pairing and is not bypassed. |
+| **TRANSPORT — NCM** | `IphoneCarPlayConfiguration`, `NcmFunctionDiscovery`, `NcmUsbBridge`, and `Ntb16Codec` implement CDC-NCM discovery and NTB16 Ethernet framing. | Implemented subset; Android 5.1 async USB API incompatibility below prevents claiming API 22 operation. |
+| **iAP2** | `Iap2LinkEngine` handles marker, synchronization, checksums, sequence/ack handling, retransmission and bounded queues; `Iap2Session`, `Iap2LinkChannel`, `Iap2CsmChannel`, and CSM codecs provide the byte/session/control-message layers. | Substantial implemented subset, not evidence of complete conformance to every iAP2 feature. |
+| **AUTHENTICATION — iAP2 MFi** | `Iap2MfiAuthenticationClient` implements AA00–AA05 certificate/challenge/signature exchange. `MfiAuthenticator` has local-file, I2C coprocessor, USB-CH341 and remote provider implementations. | Protocol/client code exists; a trusted, legitimate identity/provider is deployment-required and not established for the E01 by this source audit. |
+| **CARPLAY SESSION** | `Iap2WiredControlClient` sequences identification, authentication, power, subscriptions, availability, and start-session control. | Implemented path in source; iPhone acceptance/interoperability unverified. |
+| **MEDIA / AirPlay** | `CarPlayVpnService`, `AirPlaySession`, `CarPlayMediaEngine`, media stream classes and `AndroidMediaSink` cover the IP listener, RTSP session/stream setup, encrypted event channel, video/audio/DataStream, decoding/playback and optional microphone. | Substantial source implementation; not runtime-verified in this phase. |
+| **INPUT** | `CarPlayHostActivity` forwards touch through `CarPlayController` to `AirPlaySession`; `AirPlayHid` encodes touch and other HID reports. | Implemented in source; device mapping/interoperability unverified. |
+
+#### Transport boundary and relation to QDrive
+
+The transport seam for protocol byte streams is
+`BlockingDuplexByteStream`, consumed by `Iap2UsbMuxHost`, Lockdown/TLS clients,
+and `Iap2Session.open`/`Iap2Session.openTunnel`. It is a useful insertion point for
+another compatible stream implementation, but it is not the whole direct-USB contract:
+the wired design additionally requires a working NCM Ethernet bridge for AirPlay TCP/IP.
+DiPlay already has Android `UsbManager` implementations for both interfaces, so the
+QDrive native usbmuxd path is not needed merely to obtain direct USB access.
+
+QDrive's `UsbManager -> FD -> JNI -> libSSPAirPlayUSB/libusbserver -> usbmuxd/Lockdown`
+and DiPlay's Java USBMUX/Lockdown are related at the broad USBMUX/Lockdown layer only.
+Lockdown by itself does not supply iAP2, MFi accessory authentication, CarPlay control,
+or the NCM/AirPlay network. DiPlay's source explicitly places iAP2 on the byte stream
+returned by Lockdown `StartService`, and places AirPlay IP traffic on NCM. QDrive's
+implementation is therefore useful as proof of a stock USB-host precedent, not as an
+Apple CarPlay session engine or a proven drop-in transport.
+
+Wireless is a separate implementation: DiPlay has Bluetooth RFCOMM/iAP2 bootstrap,
+wireless control, and AirPlay type-130 tunnel/handoff paths. This does not create a
+verified E01 `GEELY_BT` bridge, and this phase makes no claim that the vehicle Bluetooth
+stack is a usable iPhone bootstrap transport.
+
+#### Authentication boundary and open-source build
+
+MFi authentication is required by the wired controller's sequence before its CarPlay
+availability/start-session steps. `Iap2MfiAuthenticationClient` sends an accessory
+certificate in response to AA00, signs the AA02 challenge via the selected
+`MfiAuthenticator`, and waits for AA05; it reports AA04 as failure. The AirPlay
+`/pair-setup` and `/pair-verify` procedures are a separate AirPlay session security
+layer and do not replace iAP2 accessory authentication.
+
+Available providers have materially different requirements:
+
+* `LocalMfiAuthenticationClient` loads an explicitly provisioned identity/certificate
+  and checks that the EC key matches the certificate. Its own source says this
+  self-consistency check does **not** establish iPhone trust.
+* I2C/USB-CH341 providers require a reachable MFi authentication coprocessor; the
+  UI/configuration includes a deployment-supplied CH341 USB bridge or Linux I2C path.
+  This audit did not establish such hardware in the E01.
+* `RemoteMfiAuthenticationClient` delegates certificate/signing operations to a
+  configured remote endpoint; it is not a built-in credential or an offline solution.
+
+The normal source build intentionally contains no accessory identity. `mobile/build.gradle.kts`
+accepts local authentication assets only through the explicit local-only
+`DIPLAY_AUTH_ASSETS_DIR` input, and the standalone-debug task checks that those assets
+were supplied. No credential material was inspected or reproduced for this audit.
+Accordingly, the open-source build contains the authentication protocol plumbing, but
+cannot, on its own, complete a trusted MFi exchange.
+
+#### API 22 compatibility blockers
+
+The declared `minSdk` is 22, but the direct USB read path calls newer Android framework
+methods without API guards:
+
+* `IphoneUsbHost` calls `UsbRequest.queue(ByteBuffer)` and
+  `UsbDeviceConnection.requestWait(long)`.
+* `NcmUsbBridge` calls the same `queue(ByteBuffer)` and timed `requestWait(long)` APIs.
+* Lockdown pairing/plist/TLS code (`LockdownPairRecord`, `LockdownPlistChannel`,
+  and `LockdownTlsEngineFactory`) uses `java.util.Base64`, which is not available in
+  the Android framework until API 26. No core-library desugaring configuration was
+  found. This affects the wired path before iAP2 can start, not just the optional
+  remote MFi provider.
+
+These overloads were added in API 26. Android 5.1/API 22 provides the older
+`queue(ByteBuffer, int)` and untimed `requestWait()` forms instead. As written, the
+direct USBMUX/Lockdown/NCM path cannot be considered API 22 compatible; invoking it on
+Android 5.1 risks missing-method/class runtime failures. A compatibility implementation
+must provide Base64 support and preserve bounded cancellation/close behavior despite
+the older untimed USB request wait.
+
+There is a further transfer-size constraint: the code queues 64 KiB USB read buffers
+and NCM permits NTB16 blocks up to the 16-bit limit. Before Android 9/API 28, Android's
+USB transfer APIs cap an individual transfer at 16 KiB. The API 22 port must therefore
+also handle smaller request/transfer chunks and reassembly/termination correctly rather
+than simply swapping method overloads.
+
+Other inspected newer-API usage is generally guarded (for example typed parcelable
+retrieval/dynamic receiver flags on API 33, Bluetooth runtime permissions on API 31,
+and microphone blocking reads on API 23). These guards do not remove the API 26
+USB-request and Base64 blockers. `Iap2LocationClient` also uses `java.time.Instant`
+(API 26) for location messages; this must be avoided or desugared if that optional
+feature is used on API 22. The USB permission `PendingIntent` includes `FLAG_IMMUTABLE`,
+introduced after API 22; although that flag is passed as an integer bit, its behavior
+on the target vendor Android 5.1 build should be included in compatibility verification.
+
+Android API references: [UsbRequest](https://developer.android.com/reference/android/hardware/usb/UsbRequest),
+[UsbDeviceConnection](https://developer.android.com/reference/android/hardware/usb/UsbDeviceConnection),
+[java.util.Base64](https://developer.android.com/reference/java/util/Base64), and
+[java.time.Instant](https://developer.android.com/reference/java/time/Instant).
+
+#### Minimum wired path and component disposition
+
+| Required component | Disposition |
+|---|---|
+| Apple device discovery, permission, USBMUX/NCM descriptor selection | **ALREADY IMPLEMENTED** in Java; **API 22 PORTING REQUIRED** for async USB operations and transfer sizing. |
+| USBMUX v2 plus Lockdown TCP/plist and first-time Trust pairing | **PORTABLE FROM EXISTING DIPLAY**; QDrive is not required for these layers. |
+| CarKit service StartSession/TLS and byte-stream handoff | **PORTABLE FROM EXISTING DIPLAY**; requires successful Lockdown pairing and service support from the phone. |
+| iAP2 link, CSM framing, identification and wired control subset | **ALREADY IMPLEMENTED** in source; actual iPhone acceptance remains unverified. |
+| MFi certificate and challenge signing | **REQUIRES LEGITIMATE EXTERNAL COMPONENT**: a trusted provisioned identity or supported MFi coprocessor/provider. Availability on the E01 is **UNKNOWN**. |
+| NCM IPv6 bridge, AirPlay listener/session and media/input | **ALREADY IMPLEMENTED** in source; port to API 22 and end-to-end behavior remain unverified. |
+| QDrive's native usbmuxd/Lockdown libraries | **QDRIVE-COUPLED**; not needed if DiPlay's Java USBMUX/Lockdown passes compatibility and interoperability tests. |
+
+The shortest wired route is not to write a new CarPlay engine or load QDrive's
+proprietary native libraries. First make the existing USBMUX and NCM paths genuinely
+API 22 compatible, then establish a legitimate MFi authentication target, then validate
+the existing Lockdown → CarKit → iAP2 control → NCM/AirPlay handoff in isolated,
+incremental tests. A source-level path is present, but none of these code paths was
+executed in this audit.
+
+#### Findings and safest next step
+
+1. **Existing architecture:** Java Android USB host; USBMUX/Lockdown; iAP2/CSM and wired
+   control; separate NCM/VPN/AirPlay; media and HID input are all represented in source.
+2. **Existing transport:** not a dongle transport abstraction; wired mode uses two iPhone
+   USB interfaces (USBMUX and NCM). Wireless mode has a separate Bluetooth bootstrap and
+   Wi-Fi/AirPlay path.
+3. **Transport insertion point:** `BlockingDuplexByteStream` for Lockdown/service/iAP2
+   byte streams, plus a distinct NCM network-interface bridge for AirPlay IP traffic.
+4. **iAP2 status:** substantial link, CSM, identification, authentication-message and
+   wired-control subset implemented; completeness and peer interoperability unproven.
+5. **MFi status:** exchange protocol implemented, but usable legitimate identity/provider
+   is external and not established on the E01. The ordinary source build has no identity.
+6. **QDrive relevance:** usbmuxd/Lockdown is a lower-level transport precedent only; it
+   is not equivalent to iAP2 or CarPlay, and does not replace NCM.
+7. **Missing/blocked pieces:** API 22 USB-request adaptation and transfer sizing,
+   Java Base64 compatibility for Lockdown, and a legitimate MFi target.
+8. **API 22 blockers:** API 26 `queue(ByteBuffer)`/`requestWait(long)` calls in both
+   USBMUX and NCM code; `java.util.Base64` in Lockdown; API 28-era 16 KiB transfer limit
+   also needs handling.
+9. **Minimum architecture:** use DiPlay's Java USBMUX + Lockdown to open CarKit, feed
+   that service byte stream to its iAP2 control stack, and use the separate NCM bridge
+   to carry the AirPlay network/media path.
+10. **Phase 3C.3:** a live end-to-end iPhone experiment is **not yet technically justified**.
+    Resolve and test API 22 USB and Base64 compatibility and the legitimate MFi provider
+    first. The safest next experiment is PC-side API 22 compatibility work with
+    fake/controlled USB stream tests and no attached iPhone; afterward, confirm an
+    authorized MFi provider before any separately approved hardware test.
+
+**Verdict: WIRED PATH BLOCKED BY AUTHENTICATION**
+
+This verdict does not mean DiPlay lacks the CarPlay protocol/session code. It means the
+source-only audit found no E01-proven legitimate MFi identity/coprocessor, and the
+current Geely launch build deliberately gates connection startup, while direct-USB
+handling also has API 22 runtime blockers that must be resolved before a controlled
+live test.
+
+### Phase 3C.3B — MFi authentication provider feasibility audit
+
+The detailed static report is [PHASE3C3B_MFI_PROVIDER_AUDIT.md](./PHASE3C3B_MFI_PROVIDER_AUDIT.md).
+No iPhone, iAP2 session, USB/I2C/Bluetooth operation, vendor service, or
+authentication attempt was used for this audit. The runtime connection gate remains
+disabled.
+
+DiPlay already implements the AA00–AA05 iAP2 MFi exchange. Its `MfiAuthenticator`
+boundary has four provider routes:
+
+| Provider | Source requirements | E01 status |
+|---|---|---|
+| Local identity | Explicitly provisioned `offline-mfi/identity.pk8` (PKCS#8 P-256 EC private key) and `certificate.p7b` (one X.509 certificate); stored in app-private files. Local signing/key consistency does not prove Apple trust. | No authorized identity in the ordinary build; not established on E01. |
+| Direct I2C coprocessor | Accessible `/dev/i2c-N`, packaged `xcertplay_i2c` JNI library, permitted OS/SELinux access, and compatible chip. The source probes 7-bit I2C addresses `0x10` then `0x11`. | No bus, node, access rule, Binder service or responding chip is established by collected artifacts. |
+| CH341-to-I2C | External CH341 bridge and compatible MFi coprocessor; deployment-configured VID/PID and Android USB permission. | No deployed bridge identity or attached coprocessor established. |
+| Remote provider | Remote service implementing `/mfi/reset`, `/mfi/certificate`, and `/mfi/sign`, backed by an authorized identity/provider. | No authorized endpoint or identity established. The current client transmits a literal `Authorization: ******` placeholder rather than standard token authentication; secure provider authentication would need to match/replace that contract before deployment. |
+
+The `0x10` and `0x11` I2C device addresses must not be confused with coprocessor
+registers `0x10`/`0x11`. `MfiDeviceScanner` performs register-select writes and reads;
+it is active I2C traffic, not passive discovery, and was not run.
+
+The Geely/Neusoft DEX audit found embedded Apple wrappers, an Apple authentication
+state listener, and USB/UEvent/NCM control hooks, but no Java MFi coprocessor or I2C
+access path. `AppleCore_jni` and `ApplePrivate_jni` remain unavailable in the collected
+artifacts, so native behavior cannot be ruled in or out. QDrive's USBMUX/Lockdown and
+its own activation/signature helper are not evidence of Apple MFi certificate/challenge
+authentication. Existing collected artifacts lack a complete E01 `/dev`/sysfs
+inventory, board documentation, I2C access policy, and vendor I2C service
+implementation; static absence does not prove physical absence.
+
+**Minimum missing component:** one authorized identity/signing provider—a compatible
+MFi coprocessor via an authorized bus/bridge, correctly provisioned local identity,
+or legitimate remote provider. No protocol redesign or authentication bypass is
+appropriate.
+
+**Phase 3C.3C hardware detection is not justified yet.** First gather read-only
+authoritative bus/node/service/access evidence. Only a documented candidate path
+should be considered for a separately approved, narrowly scoped detection test.
+
+**Phase 3C.3B verdict: INSUFFICIENT EVIDENCE.** This is a hardware/provider evidence
+gap, not a claim that the physical E01 definitely lacks an authentication chip.
+
+### Phase 3C.3C — E01 passive MFi/I2C hardware inventory
+
+Settings > Diagnostics now exposes **Run passive MFi/I2C inventory** as a manual
+action. It does not run on launch or when Settings opens. The inventory is limited
+to direct `/dev` children matching `i2c-N`, `/sys/class/i2c-dev/`, and
+`/sys/bus/i2c/devices/`. It reports node type, `canRead`/`canWrite`, mode/owner
+metadata when available, sysfs buses and registered client addresses, and bounded
+`name`, `modalias`, and `uevent` text plus symlink targets/resolved paths. Permission
+and read errors are retained in the displayed report. The report is included in
+Save diagnostic report.
+
+The implementation uses `lstat`, access checks, directory enumeration, readlink,
+canonical-path checks and bounded reads of ordinary sysfs text files only. It does
+not open `/dev/i2c-*`, issue ioctl, access `I2cTransport`, run `MfiDeviceScanner` or
+`LocalMfiProbe`, instantiate an authentication client, or interact with USB,
+Bluetooth, an iPhone, vendor services, or CarPlay. Sysfs-resolved paths are
+restricted to `/sys`; unrelated `/dev` and `/sys` trees are not enumerated.
+Keyword matches merely flag identifying text; generic addresses (including
+`0x10`/`0x11`) are explicitly not treated as MFi evidence.
+
+Fake-filesystem tests assert that only the three approved directories are listed,
+device nodes are never read, sysfs reads remain bounded, failures are reported, and
+no I2C/authentication transport can be reached through the inventory's filesystem
+only dependency boundary. The connection gate remains
+`LegacyLaunchBuild.CONNECTIONS_ENABLED = false`; minSdk remains 22. This inventory
+does not establish whether any reported generic device is an Apple authentication
+coprocessor. Stop after collecting/exporting the report; do not run the active
+scanner or proceed to authentication.
+
+### Phase 3D.1 — Passive direct iPhone USB enumeration
+
+Real-E01 Phase 3C.3C testing found `/dev/i2c-0` through `/dev/i2c-3`, all
+root-only `0600`, and no Apple/MFi/authentication evidence in registered sysfs
+clients. The onboard-I2C MFi route is deferred; no active scanner/probe is approved.
+
+The new Settings/Diagnostics action **Scan connected USB devices** observes
+Android's existing USB host list only, using API22-compatible `UsbManager`
+device-list and permission-status getters plus device/interface/endpoint
+descriptor getters. The injected inventory interface exposes only detached
+metadata snapshots, with no device connection or transport capability.
+No USB permission is requested, no device is opened, no interface is claimed,
+and no transfer, USB role/mode change, vendor invocation or authentication occurs.
+An Apple VID `0x05AC` is labeled **Apple USB device candidate**, not CarPlay proof.
+Results and explicit enumeration errors appear in the UI and saved diagnostic
+report. Nothing runs automatically; all existing connection gates stay disabled.
+
+Tests exercise the API22-compatible Android adapter in the repository's SDK28
+Robolectric harness (installed Robolectric does not support SDK22), allow-list its mock interactions,
+check compiled passive classes for prohibited USB/transport dependencies, and
+verify manual UI execution and report export. Follow the baseline/direct-cable
+procedure in [TESTING.md](TESTING.md#phase-3d1--passive-direct-iphone-usb-enumeration).
+Stop after Phase 3D.1; no Lockdown, usbmuxd, iAP2, MFi, NCM or CarPlay follow-up.
+
+### Phase 3D.2 — Direct USBMUX/Lockdown transport test
+
+Phase 3D.1 passed on the real E01 with Carlinkit completely removed: the unlocked
+direct iPhone was visible as one Apple `05AC:12A8` device with 12 interfaces and
+existing Android USB permission. The `255/254/2` interface exposed BULK OUT
+`0x04` and BULK IN `0x85`, max packet size 512. This establishes enumeration,
+not yet working USBMUX/Lockdown communication.
+
+#### Existing path audit and reuse
+
+* `IphoneUsbMatcher.appleVendor()` / `IphoneUsbHost.discover()` select Apple VID.
+  The diagnostic uses the same VID, requires exactly one Apple device, and never
+  guesses between phones.
+* `IphoneCarPlayConfiguration.isUsbMuxInterface()` identifies `255/254/2`;
+  `usbMuxEndpoints()` prefers the evidenced `0x04/0x85` BULK pair, with the
+  existing unique BULK OUT/IN fallback for other models. `255/253/1` is the
+  existing Apple Ethernet signature, **not USBMUX**. Neither packet size 512 nor
+  an interface index alone identifies the transport.
+* The ordinary `IphoneUsbHost.openIap2UsbSession()` calls `setConfiguration`;
+  its re-enumeration path sends vendor control request `0x52`. Those paths are
+  deliberately **not called or instantiated** by this diagnostic.
+* `AndroidDirectUsbMuxAccess` adds only the scoped opener for the currently
+  exposed interface: permission is checked first, then `openDevice` and
+  `claimInterface(selected, false)`. No kernel-driver force detach,
+  configuration/alternate-setting switch or control transfer is attempted.
+* The existing `Iap2UsbSession` performs bulk writes and request-based reads,
+  retaining `UsbTransferCompatibility`'s API22 queue/wait path and 16 KiB limit.
+  It now implements the injectable `UsbMuxBulkPipe` interface. Partial writes
+  share one logical write deadline. On diagnostic close, pending reads are
+  cancelled, only the claimed interface is released, and the device is closed.
+* Existing `Iap2UsbMuxHost` / `UsbMuxFrameBuffer` implement version-2 exchange,
+  setup and framed TCP. The diagnostic supplies a 5-second handshake timeout;
+  the normal host default remains unchanged. Only port `62078` is connected.
+* Existing `LockdownPlistChannel` implements four-byte big-endian XML plist
+  lengths, bounded messages and partial-stream reads. The existing
+  `LockdownPairingClient.getValue()` demonstrates `GetValue` request shape, but
+  that client is **not instantiated**: its ordinary workflow performs
+  `SetValue(UntrustedHostBUID)` and `Pair`. The diagnostic sends a single
+  plaintext `GetValue` with only `Key=ProductType` through the existing channel.
+
+The response must identify `Request=GetValue` and contain a text model
+`Value`; only bounded safe model metadata is displayed. No UDID, serial number,
+Wi-Fi address, public key, full plist or pairing record is dumped. A remote error
+is reported without retries or pairing. Android cannot reliably observe an
+iPhone-screen Trust prompt: the UI provides **Trust prompt appeared — STOP** to
+record the user's observation and cancel; never approve it.
+
+All access is manual through **Test USBMUX + Lockdown**. Step deadlines are
+5 seconds (ordinary framed writes use the existing 2-second bound), the watchdog
+closes the pipe at 25 seconds, and cancel/activity pause/destroy close active
+access. UI and saved reports contain selection, permission, open/claim, handshake,
+connect/query, cleanup, failure stage and an evidence-based verdict. The strict
+diagnostic boundary excludes pairing, ValidatePair, pairing records, Trust
+mutation, StartSession, TLS, CarKit, iAP2, MFi, NCM, Bluetooth, vendor
+services/JNI, AirPlay and CarPlay. `CONNECTIONS_ENABLED` remains false, minSdk 22.
+Stop after the test/report; no Phase 3D.3 is enabled.
+
+### Phase 3D.2A — Passive iPhone USB configuration mapping
+
+The real E01 Phase 3D.2 result stopped at descriptor selection for Apple
+`05AC:12A8`: no unambiguous `255/254/2` BULK pair, no device open and no Lockdown
+attempt. Phase 3D.1 reported two identical-looking flattened candidates at indices
+6 and 8, each interface ID 1 with BULK OUT `0x04` and IN `0x85`. Those indices are
+not selectors and the supplied results do not establish configuration membership
+or alternate settings.
+
+#### Static selection audit (no runtime selector change)
+
+| Concern | Existing behavior | Implication for the E01 sample |
+|---|---|---|
+| Multiple configurations | `IphoneCarPlayConfiguration.find()` enumerates every configuration, prefers the first with USBMUX + CDC NCM + Apple Ethernet, then USBMUX + CDC NCM. | This is descriptor-composition selection for the older active CarPlay path, not discovery of the current configuration. |
+| Configuration IDs | IDs are logged and the selected configuration object is passed to `setConfiguration()` in `IphoneUsbHost`. The selector does not hard-code an ID. | An ID identifies a descriptor configuration; ordering or ID does not prove it is active. This active opener must not be used in 3D.2A. |
+| Alternate settings | `describe()` and the opener log `alternateSetting`; USBMUX matching ignores it and returns the first matching interface within a configuration. No `setInterface()` occurs in these selection/open paths. | There is no active-alt-setting selection or passive current-alt-setting query here. Mapping reports every exposed alt value. |
+| Apple `0x12A8` | `IphoneUsbMatcher.appleVendor()` accepts any Apple VID; a separately configured matcher can accept exact VID/PID pairs. Neither the configuration selector nor the direct selector special-cases PID `0x12A8`. | The real product ID alone cannot resolve the duplicate candidates. |
+| Direct Phase 3D.2 selector | `DirectUsbMuxSelection.find()` searches the flattened device interface list for `255/254/2`, uses the existing BULK pair logic, requires positive max-packet sizes and exactly one candidate. It does not enumerate configurations or identify the active one. | Two matching flattened candidates correctly cause a safe stop before open. This behavior remains unchanged. |
+| Active/current configuration | Neither selection path obtains current configuration/alternate-setting state using passive getters. | 3D.2A must report UNKNOWN and not guess. |
+
+The manual **Map iPhone USB configurations** action extends the same injectable
+passive snapshot boundary. For each Apple device it reads `getConfigurationCount`
+and every configuration's array index, ID, nullable name, public attribute flags,
+max power in milliamps, interface count, and configuration-scoped interface/alt
+and endpoint descriptors. These getters were introduced by API21 and are available
+on API22. Public `UsbConfiguration` does not expose raw `bmAttributes`: the report
+explicitly marks it unavailable and supplies only the exposed self-powered and
+remote-wakeup bits (mask `0x60`), not a fabricated raw attribute byte.
+
+The flattened interface inventory is retained. The correlation section lists
+`configuration -> interface -> alt setting -> endpoints`, all full-descriptor
+matches in the flattened view, and the inverse matches for every USBMUX-signature
+candidate. Different configuration entries, alternate settings within a config/
+interface ID, endpoint differences and descriptor-identical repeated entries are
+reported as observations. Descriptor equality is not Android object identity:
+identical matches cannot be uniquely assigned and repeated entries do not prove
+an Android duplication bug.
+
+**Conclusion before the real mapping report:** configuration metadata can
+distinguish candidates by configuration membership or alternate-setting values
+if those differ. The supplied flattened E01 report cannot establish which case
+applies. Even different configuration IDs would not identify the active one.
+Collect the real 3D.2A report before changing Phase 3D.2 to select anything.
+
+Nothing runs automatically; no device is opened, permission requested, interface
+claimed, configuration/alt setting changed, transfer performed or USB request
+created. No USBMUX, Lockdown, Trust/pairing, iAP2, MFi, NCM, Bluetooth, AirPlay or
+CarPlay starts. The output is included in Save diagnostic report and the connection
+gate remains false. Tests cover multiple configurations, reused interface IDs,
+alternate settings, the observed 12-entry flattened layout with candidates 6/8,
+ambiguous equality, descriptor differences, getter-only Android interaction,
+manual UI execution and export. Test configuration splits are hypotheses, not
+claimed real E01 descriptors.
+
+### Phase 3D.2B — Read-only active iPhone USB configuration
+
+Real-E01 Phase 3D.2A confirmed Apple `05AC:12A8` exposes configuration 1 `PTP`,
+2 `iPod USB Interface`, 3 `PTP + Apple Mobile Device`, and 4
+`PTP + Apple Mobile Device + Apple USB Ethernet`. Configurations 3 and 4 both
+contain interface ID 1, alt 0, `255/254/2`, BULK OUT `0x04` and IN `0x85`.
+This explains the duplicate flattened USBMUX candidates without implying which
+configuration is currently active. Config 4 also exposes interface ID 2
+`255/253/1` alternate-setting descriptors for Apple USB Ethernet.
+
+The new manual **Read active USB configuration** diagnostic selects exactly one
+Apple device, records VID/PID, verifies existing permission, rechecks attachment/
+identity/permission immediately before open, and opens without claiming any
+interface. `AndroidActiveUsbConfigurationAccess` exposes only one request:
+standard DEVICE_TO_HOST / DEVICE recipient `GET_CONFIGURATION`, request type
+`0x80`, request `0x08`, value/index 0, length 1, timeout 1000ms. This uses the
+API22-compatible controlTransfer overload. The connection is closed in `finally`
+immediately after the request, before descriptor correlation. No retry or other
+control request is issued. Negative, zero-length or non-one-byte transfer results
+are explicit failures; no configuration is inferred from array order.
+
+The returned unsigned byte is `bConfigurationValue`, matched to exactly one
+configuration ID in the freshly collected passive descriptors. Zero means
+unconfigured, not config-array index 0. Unknown/duplicate IDs are correlation
+errors, not guesses. The report lists the matching name and scoped USBMUX
+interface/endpoints and Apple USB Ethernet interface/alternate-setting descriptors
+when present. Alternate-setting descriptors do not identify the current alternate
+setting; no interface or alternate setting is activated.
+
+Nothing runs automatically and results are included in Save diagnostic report.
+Missing permission stops without requesting it. No claim, setConfiguration,
+setInterface, bulk transfer, USB request, USBMUX, Lockdown, Trust/pairing, session,
+CarKit, iAP2, MFi, NCM, Bluetooth, vendor/AutoKit/Carlinkit, AirPlay or CarPlay
+operation occurs in this path. The existing Phase 3D.2 selector is unchanged;
+do not rerun it yet. minSdk stays 22 and CONNECTIONS_ENABLED stays false.
+
+### Phase 3D.2C1: QDrive Valeria branch discriminator
+
+The [native call-site audit](PHASE3D2C1_QDRIVE_VALERIA_DISCRIMINATOR.md)
+resolves the comparison PLT entry to **strstr**, not strcmp. It searches
+case-sensitively for `Valeria` in the first alternate's interface string,
+across every advertised configuration and interface. The first substring
+match returns helper TRUE -> configuration-selection branch. Exhaustion
+returns FALSE -> vendor-request branch.
+
+The manual **Inspect iPhone interface strings** diagnostic reports cached
+configuration/interface names separately, then requires existing permission
+and opens without claims. It reuses GET_CONFIGURATION, validates raw
+descriptors, fetches only first-LANGID and relevant iInterface string
+descriptors using standard read-only requests (1000ms timeout), and closes
+before reporting its verdict. C2 corrects missing-index and individual
+native-read failure handling as described below. It never invokes vendor code or either branch,
+and all runtime gates remain disabled. The real E01 result is still pending.
+
+### Phase 3D.2C2: complete the native-equivalent iteration
+
+Real E01 C1 opened `05AC:12A8`, read active config 1/PTP and string `"PTP"`,
+but aborted at config 2/interface 0/iInterface=0. Native re-audit resolves
+buffer initialization to `__aeabi_memclr8(buffer,255)`, not an 0xFF fill.
+Index zero returns -2 without writing the cleared buffer; negative reads and
+native-rejected string descriptors also leave it empty. QDrive then searches
+the empty output and continues, not aborts.
+
+The corrected read-only diagnostic reports NO_STRING_INDEX, STRING_READ_PASS,
+STRING_READ_FAILED or MALFORMED for each first-alternate entry, plus substring
+result and continue/terminate decision. It reaches configurations 3/4 after
+the missing config-2 index and preserves immediate success on a valid match.
+No string/LANGID cache masks repeated native per-entry reads. A complete
+no-match scan with only known-empty failure paths supports helper FALSE;
+unresolved malformed native memory behavior, Android exceptions, raw-layout
+failure or failed cleanup cannot prove FALSE.
+
+See the [C1/C2 native audit](PHASE3D2C1_QDRIVE_VALERIA_DISCRIMINATOR.md).
+Neither resulting branch is performed by the C2 diagnostic. The subsequent
+real-E01 report establishes FALSE: PTP, Apple USB Multiplexor and AppleUSBEthernet
+strings contain no Valeria. The [3D.2D static audit](PHASE3D2D_QDRIVE_VENDOR_REQUEST_AUDIT.md)
+recovers OUT `40/52/value0/index2/length0` without proving the resulting state.
+
+### Phase 3D.2E: controlled vendor-request observation
+
+The [manual controlled test](PHASE3D2E_QDRIVE_VENDOR_TRANSITION_TEST.md)
+adds a distinct warning-colored button, successful read-only preflight and
+confirmation before one audited request. Its 1000ms timeout intentionally
+differs from QDrive's unbounded0. No retry/configuration selection/claim/bulk
+or transport follows. Fresh USB inventory and permitted read-only active
+configuration/interface-string inspection determine the actual post-state;
+return0 does not prove transition. Normal connections remain disabled.
+The subsequent user-reported real-E01 test observed detach/reattach after
+approximately0.9 seconds, same `05AC:12A8`, five configurations/18 flattened
+interfaces, exact Valeria TRUE, but active configuration still1/PTP.
+Config5 advertises USBMUX, Valeria and genuine CDC-NCM. No transport followed.
+The [Phase3D.2F static audit](PHASE3D2F_QDRIVE_POST_VALERIA_CONFIGURATION_AUDIT.md)
+proves QDrive next targets configuration value5 from bNumConfigurations.
+DiPlay's configuration-scoped selector recognizes that layout; its older
+flattened USBMUX diagnostic remains potentially ambiguous. Activation5 is
+not yet tested; Phase3D.2G is designed only. Normal runtime remains disabled.
+
+### Phase 3D.2G: manual configuration5 activation test
+
+The [configuration-only implementation](PHASE3D2G_QDRIVE_CONFIGURATION5_TEST.md)
+is now available as a separate confirmed manual diagnostic. It validates the
+already-transitioned config5 descriptor/string state and active1, selects the
+actual Android configuration object ID5 once, then performs standard readback
+and bounded USB observation. No driver detach, claims, transport, vendor
+request, retry or restore. Real-E01 activation was untested at build time;
+the subsequent user-reported PASS is recorded below. No subsequent transport
+phase is implemented. Normal connection gates remain disabled.
+
+### Phase 3D.2H: active config5 USBMUX integration audit
+
+The subsequent user-reported G real-E01 test passed: settertrue, immediate/
+final GET_CONFIGURATION5, stable enumeration and no claims or transport.
+The [H static audit](PHASE3D2H_ACTIVE_CONFIG5_USBMUX_AUDIT.md) verifies API22
+configuration-scoped interface traversal and numeric native claim semantics.
+The proposed I test verifies active5, claims config5 ID1/alt0 with forcefalse,
+releases/closes and STOPs without bulk. No I implementation or hardware
+operation was added; normal connections remain disabled.
+
+### Phase 3D.2I: controlled active5 USBMUX claim/release
+
+The [separate confirmed claim-only diagnostic](PHASE3D2I_ACTIVE_CONFIG5_USBMUX_CLAIM_TEST.md)
+is implemented in version `0.2.12-api22-phase3d2i-usbmux-claim`.
+It requires existing permission, five configurations, scoped config5
+Valeria/USBMUX/NCM evidence and same-connection GET_CONFIGURATION5.
+Only config5 interface1/alt0 is claimed once with forcefalse, released once
+if claimtrue and closed in finally. No setter/vendor/alternate/driver detach
+or bulk/USBMUX/Lockdown/projection follows. Hardware result remains pending.
+47 focused tests and the debug build passed; built minSdk22/signing verified,
+normal connections remain disabled. Leave the iPhone Trust prompt untouched.

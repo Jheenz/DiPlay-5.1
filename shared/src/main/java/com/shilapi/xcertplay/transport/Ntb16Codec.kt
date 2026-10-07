@@ -110,3 +110,76 @@ object Ntb16Codec {
 
     private const val MAX_DATAGRAM_BYTES = 0xffff - DATAGRAM_INDEX
 }
+
+/** Incremental NTB16 stream framing for USB reads that split or coalesce transfer blocks. */
+internal class Ntb16StreamDecoder {
+    private val buffered = ByteArray(MAX_WIRE_BLOCK_BYTES)
+    private var head = 0
+    private var tail = 0
+
+    val bufferedBytes: Int get() = tail - head
+
+    fun offer(chunk: ByteArray): List<ByteArray> {
+        val frames = ArrayList<ByteArray>()
+        var offset = 0
+        while (offset < chunk.size) {
+            drain(frames)
+            compact()
+            val count = minOf(buffered.size - tail, chunk.size - offset)
+            if (count <= 0) throw IllegalArgumentException("Incomplete NCM NTB exceeds its maximum size")
+            chunk.copyInto(buffered, tail, offset, offset + count)
+            tail += count
+            offset += count
+        }
+        drain(frames)
+        return frames
+    }
+
+    private fun drain(frames: MutableList<ByteArray>) {
+        while (tail - head >= NTH_HEADER_BYTES) {
+            if (readU32(buffered, head) != Ntb16Codec.NTH16_SIG) {
+                throw IllegalArgumentException("NCM read buffer does not begin with an NTB16 header")
+            }
+            val blockLength = readU16(buffered, head + 8)
+            if (blockLength !in MIN_BLOCK_BYTES..MAX_BLOCK_BYTES) {
+                throw IllegalArgumentException("Invalid NCM NTB16 block length $blockLength")
+            }
+            val wireLength = blockLength + if (blockLength % USB_PACKET_SIZE == 0) 1 else 0
+            if (tail - head < wireLength) return
+            if (wireLength > blockLength && buffered[head + blockLength] != 0.toByte()) {
+                throw IllegalArgumentException("Invalid NCM NTB16 short-packet pad")
+            }
+            frames += Ntb16Codec.parse(buffered, head, blockLength)
+            head += wireLength
+            if (head == tail) {
+                head = 0
+                tail = 0
+            }
+        }
+    }
+
+    private fun compact() {
+        if (head == 0) return
+        val size = tail - head
+        if (size > 0) buffered.copyInto(buffered, 0, head, tail)
+        head = 0
+        tail = size
+    }
+
+    private fun readU16(source: ByteArray, offset: Int): Int =
+        (source[offset].toInt() and 0xff) or ((source[offset + 1].toInt() and 0xff) shl 8)
+
+    private fun readU32(source: ByteArray, offset: Int): Int =
+        (source[offset].toInt() and 0xff) or
+            ((source[offset + 1].toInt() and 0xff) shl 8) or
+            ((source[offset + 2].toInt() and 0xff) shl 16) or
+            ((source[offset + 3].toInt() and 0xff) shl 24)
+
+    private companion object {
+        const val NTH_HEADER_BYTES = 12
+        const val MIN_BLOCK_BYTES = 28
+        const val MAX_BLOCK_BYTES = 0xffff
+        const val MAX_WIRE_BLOCK_BYTES = 0x1_0000
+        const val USB_PACKET_SIZE = 512
+    }
+}

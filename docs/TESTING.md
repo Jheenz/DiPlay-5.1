@@ -644,3 +644,346 @@ With the car parked, open **Settings → Location → Report location to iPhone*
 - With CarPlay connected, the media key turns the joystick on (toast with the keys, "Joystick on" on the dashboard where the song shows). Previous/next and the volume roller move CarPlay's focus on the main screen (lists, the Maps side panel), play/pause selects and the custom key goes back. The media key turns it off and every key has its usual action again; the custom key switches the map zoom again.
 - With "Joystick turns off by itself" on, the joystick ends 15 seconds after the last press and when a route starts; with it off, it stays on until the media key. Disconnect CarPlay or turn the setting off while it is on: it must be off afterwards.
 - Without a CarPlay session the media key opens BYD media. During a CarPlay or Bluetooth call every key keeps its usual action, and no press loses its release.
+
+## Phase 3B.6 — Native Geely CarPlay static audit
+
+The audit is PC-side manifest/DEX inspection only. It found that the setting
+widget's `CarPlaySwitch` dispatches to `SettingWidgetService.turnToCarPlay`,
+updates `Settings.System["CarplayMode"]`, and calls the Apple native wrapper.
+That wrapper unconditionally requests `AppleCore_jni`; its Apple-private
+counterpart requests `ApplePrivate_jni`. Neither library is in the inspected
+APK payloads, and the prior on-car search did not find the expected
+`com.neusoft.appleservice` package. The stock Java code contains USB/UEvent and
+`usbncm0` hooks, but no complete native wireless transport or working
+NForetek/GEELY_BT bridge was established. The launcher receiver handles
+CarPlay state/UI broadcasts; it is not the transport. Full findings, scope
+limits and the hard-key/AutoKit caveats are in
+[COMPATIBILITY.md](COMPATIBILITY.md).
+
+### Safe next step on the Okavango
+
+1. With the vehicle parked, run the existing manual **Phase 3B.5b Apple
+   implementation discovery** collector once. Save its report and preserve
+   the exact candidate package/component metadata, APK export paths and
+   hashes, every package `nativeLibraryDir`, both 32/64-bit library roots,
+   aliases, failures and zero/partial results.
+2. Copy only its verified **SUCCESS** exports from the reported paths into
+   ignored local `vendor-apks/` and continue static inspection on the PC.
+   Treat package names and library filenames as candidates, not proof of a
+   working transport. This read-only inventory is to resolve the remaining
+   package/ABI/path uncertainty, not to activate CarPlay.
+3. Stop after collection. Do not open the stock CarPlay dialog or click the
+   `CarPlaySwitch`: the Java wrapper's class initialization loads the missing
+   native library without an availability guard. Do not toggle `CarplayMode`
+   or other flags, bind/start Apple or NForetek services, send broadcasts,
+   load vendor libraries, use `NfServiceSpp`, change USB roles, connect or
+   authenticate an iPhone, or begin Phase 3C.
+
+No runtime APK or device test was produced for this static-only milestone.
+
+## Phase 3B.7 — Complete native Geely CarPlay stack discovery
+
+This was a PC-side, static-only follow-up. No ADB device was attached, no
+package/library was executed, and no mode, service, broadcast, USB role or
+iPhone state was changed. The examined local APKs still show Java Apple
+wrappers and embedded service code, but no Apple JNI libraries or complete
+native transport. The previous installed-package query did not resolve
+`com.neusoft.appleservice`.
+
+The Phase 3B.5b collector is not a complete raw-partition inventory: it does
+not recursively scan all `/system/app`, `/system/priv-app`, `/vendor/app`,
+framework JAR or vendor framework contents for DEX strings. It can therefore
+not close the remaining "renamed/optional payload elsewhere" question by
+itself.
+
+### Safest read-only collection on the actual head unit
+
+When the parked head unit is available, first record the model, product/region
+metadata and exact build fingerprint using read-only means. Then perform a
+read-only inventory of ordinary files under:
+
+- `/system/lib`, `/system/lib64`, `/vendor/lib`, `/vendor/lib64`,
+  `/system/vendor/lib` and `/system/vendor/lib64`;
+- `/system/app`, `/system/priv-app`, `/vendor/app`;
+- `/system/framework` and `/vendor/framework`;
+- installed packages' `nativeLibraryDir` and their APK/split APK paths.
+
+Do not recurse into `/dev`, `/proc` or `/sys`; do not execute or load candidate
+files. For each ordinary readable candidate, record its full source path,
+export destination, byte size and SHA-256. Preserve unreadable/not-found
+results instead of treating them as evidence of absence. Search APK/JAR DEX,
+manifest and resource strings as well as native filenames/ELF strings for the
+Phase 3B.7 terms. The current collector's installed-package and selected
+library-root results may be retained as a subset, but do not call them a
+complete partition scan.
+
+On the PC, compare a verified build known to include native wired CarPlay from
+Geely/ECARX E01, preferably VX11/Okavango-family, against the collected current
+build. Require build/model/region metadata and the readable system/vendor
+app, framework and native payload; do not download an unverified image
+automatically. This offline comparison is the safest next step toward finding
+the missing OEM implementation.
+
+Stop after read-only collection and offline inspection. Do not activate
+`CarPlaySwitch`, change `Settings.System["CarplayMode"]`, call
+`AppleInterface.setDefaultMode()`, start/bind Apple or CarPlay services, send
+broadcasts, load JNI/vendor libraries, change USB roles, connect/authenticate
+an iPhone, use `NfServiceSpp`, or begin Phase 3C.
+
+## Phase 3C.3C — Passive MFi/I2C inventory
+
+Run the desktop checks and build:
+
+```powershell
+.\gradlew.bat :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.PassiveMfiI2cInventoryTest' --tests 'com.shilapi.xcertplay.Phase3BDeviceSettingsTest'
+.\gradlew.bat :mobile:assembleDebug
+```
+
+Install the resulting debug APK on the E01, open **Settings**, and scroll to
+**Phase 3C.3C — Passive MFi/I2C inventory**. Confirm it initially says
+`not run`; press only **Run passive MFi/I2C inventory**. Review the displayed
+`/dev/i2c-*` node/access metadata, the two I2C sysfs inventories, and any
+permission/read errors, then use the existing **Save diagnostic report** action
+to export it. Do not press the Phase 3B.8 scanner or run `MfiDeviceScanner`;
+do not connect a phone or proceed to active probing/authentication. The inventory
+is specifically read-only and manual, and generic I2C addresses are not an MFi
+identification.
+
+## Phase 3D.1 — Passive direct iPhone USB enumeration
+
+Phase 3C.3C real-E01 results: `/dev/i2c-0` through `/dev/i2c-3` are root-only
+`0600`; registered sysfs clients contain no Apple/MFi/authentication evidence.
+The onboard-I2C route is deferred. Do not run `MfiDeviceScanner` or active probes.
+
+```powershell
+.\gradlew.bat :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.PassiveUsbInventoryTest' --tests 'com.shilapi.xcertplay.Phase3BDeviceSettingsTest' --tests 'com.shilapi.xcertplay.DiagnosticExportUiTest'
+.\gradlew.bat :mobile:assembleDebug
+```
+
+The debug APK is `mobile\build\outputs\apk\debug\mobile-debug.apk`.
+minSdk stays 22 and `LegacyLaunchBuild.CONNECTIONS_ENABLED` stays false.
+The manual action reads only `UsbManager.getDeviceList()`, existing permission
+status, and cached device/interface/endpoint descriptor metadata. It does not
+request permission, open a device, claim an interface, perform transfers, change
+USB mode/role, invoke vendor services/JNI, or instantiate any transport or
+authentication implementation. An Apple VID (`0x05AC`) is only an
+**Apple USB device candidate**, not proof of CarPlay.
+
+Real-car procedure (with the built APK installed):
+
+1. Remove the Carlinkit dongle completely.
+2. Start the Geely normally.
+3. Open DiPlay.
+4. In Settings/Diagnostics, first run **Scan connected USB devices** with nothing
+   connected to USB port 1 and save/observe the baseline using **Save diagnostic report**.
+5. Connect the iPhone **directly** to USB port 1 using a known-good data cable.
+6. Unlock the iPhone.
+7. Do not approve Trust or other prompts unless instructed in a later phase.
+8. Run **Scan connected USB devices** again.
+9. Save the diagnostic report.
+
+Stop there. Do not proceed to Lockdown, usbmuxd, iAP2, MFi, NCM, Bluetooth or
+CarPlay. The displayed/exported report includes
+`PASSIVE ENUMERATION ONLY — no USB device opened or interface claimed`.
+An empty list describes only this Android host-list sample; it does not prove
+that the physical port supports or does not support direct iPhone connectivity.
+
+## Phase 3D.2 — Direct USBMUX/Lockdown validation
+
+Real-E01 Phase 3D.1 passed with one direct Apple `05AC:12A8` device, 12 interfaces,
+existing permission, and a `255/254/2` multiplexor with BULK `0x04/0x85` (512-byte
+packets). See [COMPATIBILITY.md](COMPATIBILITY.md#phase-3d2--direct-usbmuxlockdown-transport-test)
+for the existing implementation audit and the descriptor-selection rationale.
+Other vendor-specific bulk interfaces (`255/253/1`) are not multiplexors.
+
+```powershell
+.\gradlew.bat :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.DirectUsbMuxDiagnosticTest' --tests 'com.shilapi.xcertplay.PassiveUsbInventoryTest' --tests 'com.shilapi.xcertplay.Phase3BDeviceSettingsTest' --tests 'com.shilapi.xcertplay.DiagnosticExportUiTest' :shared:testDebugUnitTest --tests 'com.shilapi.xcertplay.transport.UsbTransferCompatibilityTest' --tests 'com.shilapi.xcertplay.transport.UsbMuxFrameBufferTest' --tests 'com.shilapi.xcertplay.transport.UsbMuxIssue100RegressionTest'
+.\gradlew.bat :mobile:assembleDebug
+```
+
+The injectable transport tests cover the twelve-interface layout at different
+indices, incorrect/ambiguous descriptor rejection, missing permission, open/claim
+failure, partial USB writes, fragmented real USBMUX/plist reads, version/TCP/query
+timeouts, disconnects, valid non-mutating model query, cleanup, cancellation and
+Trust-related remote errors. Android mock interaction allow-lists and compiled
+dependency checks guard the prohibited operations. Existing API22 compatibility
+and captured-frame regression tests remain in the targeted run. Robolectric runs
+on supported SDK28/33; API22 legacy behavior is exercised through the existing
+injectable compatibility backend, not an unsupported SDK22 sandbox.
+
+The APK stays at `mobile\build\outputs\apk\debug\mobile-debug.apk`, minSdk 22.
+`LegacyLaunchBuild.CONNECTIONS_ENABLED` remains false. Normal startup and opening
+Settings do not open USB. Only the manual button enables this narrow test.
+Permission absent reports `USB permission required — STOP`, never a permission
+request. The only Lockdown request is plaintext `GetValue(ProductType)`, with no
+pairing, record access, Trust mutation, session, TLS or service start.
+
+After installing the APK:
+
+1. Remove Carlinkit completely.
+2. Start Geely normally.
+3. Unlock iPhone.
+4. Connect iPhone directly to driver-side USB port.
+5. Open DiPlay.
+6. Open **Phase 3D.2 — Direct USBMUX/Lockdown test** in Settings/Diagnostics.
+7. Press **Test USBMUX + Lockdown**.
+8. Do not approve a Trust prompt if one appears. Press **Trust prompt appeared — STOP**
+   in DiPlay to record the observation and cancel. **Cancel transport test** also
+   closes access; activity pause/destroy cancels active tests.
+9. Save diagnostic report (wait for test completion/cleanup first).
+10. **STOP and send report for analysis.**
+
+The report displays
+`PHASE 3D.2 TRANSPORT TEST ONLY — pairing, iAP2, MFi and CarPlay disabled`,
+all attempted stages and cleanup results, plus one of the approved verdicts.
+No hardware USBMUX/Lockdown success may be claimed solely from PC fake tests.
+Do not begin pairing, Phase 3D.3, CarKit, iAP2, MFi, NCM, Bluetooth, AirPlay,
+CarPlay, USB mode changes or vendor/AutoKit/Carlinkit work.
+
+## Phase 3D.2A — Passive configuration/interface mapping
+
+The real 3D.2 test safely rejected two matching flattened USBMUX candidates before
+opening the device. Do not hard-code indices 6/8 or rerun the active test in this
+phase. The new diagnostic reads descriptor metadata only.
+
+```powershell
+.\gradlew.bat :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.PassiveUsbConfigurationMappingTest' --tests 'com.shilapi.xcertplay.PassiveUsbInventoryTest' --tests 'com.shilapi.xcertplay.Phase3BDeviceSettingsTest' --tests 'com.shilapi.xcertplay.DiagnosticExportUiTest' --tests 'com.shilapi.xcertplay.DirectUsbMuxDiagnosticTest'
+.\gradlew.bat :mobile:assembleDebug
+```
+
+APK: `mobile\build\outputs\apk\debug\mobile-debug.apk`; debug version suffix
+`-api22-phase3d2a-passive-usb-mapping`. minSdk stays 22 and
+`LegacyLaunchBuild.CONNECTIONS_ENABLED=false`.
+
+After installation, remove Carlinkit completely, start Geely normally, connect
+the unlocked iPhone directly to the driver-side USB port and open DiPlay.
+In Settings/Diagnostics open **Phase 3D.2A — iPhone USB configuration mapping**,
+press **Map iPhone USB configurations**, wait for the descriptor report and use
+**Save diagnostic report**. Stop and supply that report for analysis.
+Do not press **Test USBMUX + Lockdown**, approve Trust, change USB configuration,
+or begin pairing/projection.
+
+Compare configuration array indices/IDs, per-configuration interface indices/IDs,
+alt settings and endpoint properties with the retained flattened view. The
+structured USBMUX section reports all descriptor-value matches; identical
+flattened entries may match several configurations. Active/current configuration
+is explicitly UNKNOWN. Public API22 exposes self-powered/remote-wakeup flags but
+not the complete raw configuration attributes byte; the report labels this
+limitation. No current configuration is inferred from ordering or permission.
+See [COMPATIBILITY.md](COMPATIBILITY.md#phase-3d2a--passive-iphone-usb-configuration-mapping)
+for the static selection audit. The Phase 3D.2 selector remains unchanged pending
+the real E01 mapping report.
+
+## Phase 3D.2B — Read active USB configuration
+
+```powershell
+.\gradlew.bat :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.ActiveUsbConfigurationDiagnosticTest' --tests 'com.shilapi.xcertplay.PassiveUsbConfigurationMappingTest' --tests 'com.shilapi.xcertplay.PassiveUsbInventoryTest' --tests 'com.shilapi.xcertplay.Phase3BDeviceSettingsTest' --tests 'com.shilapi.xcertplay.DiagnosticExportUiTest'
+.\gradlew.bat :mobile:assembleDebug
+```
+
+APK: `mobile\build\outputs\apk\debug\mobile-debug.apk`, version suffix
+`-api22-phase3d2b-get-usb-configuration`. minSdk 22 and
+`LegacyLaunchBuild.CONNECTIONS_ENABLED=false`.
+
+Tests verify the exact one-byte standard GET_CONFIGURATION request and bounded
+1000ms timeout, response values 1/2/3/4, permission-denied and open-failure stops,
+malformed/zero-length/negative results, exceptions, detached/changed identities,
+unconfigured/unknown/ambiguous configuration values, close even on failure,
+getter/request/close-only interactions, prohibited dependency exclusion, manual
+UI behavior and report export. Robolectric uses supported SDK28; the used Android
+USB APIs are available on API22.
+
+Real-car procedure after installing the APK:
+
+1. Carlinkit completely removed.
+2. Start Geely normally.
+3. Unlock iPhone.
+4. Connect iPhone directly to driver-side USB port.
+5. Open DiPlay.
+6. In Settings/Diagnostics > **Phase 3D.2B — Active iPhone USB configuration**,
+   press **Read active USB configuration**.
+7. Wait for the read/cleanup result, then **Save diagnostic report**.
+8. **STOP.**
+
+Do not run Phase 3D.2 USBMUX again yet. Do not approve Trust or start pairing,
+session, authentication, NCM or projection. Report the GET_CONFIGURATION status,
+returned value, matched descriptor name, scoped USBMUX candidate, Apple USB
+Ethernet presence and cleanup. PC fixtures establish behavior, not the currently
+active configuration on the E01.
+
+## Phase 3D.2C1 - read-only QDrive interface-string discriminator
+
+See the [exact native condition and read-only boundary](PHASE3D2C1_QDRIVE_VALERIA_DISCRIMINATOR.md).
+QDrive uses case-sensitive **strstr** on the first alternate's iInterface
+string for each interface in all configurations. A substring match returns
+helper TRUE and enables its configuration-selection branch; no match enables
+the separate vendor branch. This diagnostic executes neither branch.
+
+```powershell
+.\gradlew.bat :common:testDebugUnitTest --tests 'com.shilapi.xcertplay.QDriveBranchDiagnosticTest' --tests 'com.shilapi.xcertplay.PassiveUsbInventoryTest' --tests 'com.shilapi.xcertplay.PassiveUsbConfigurationMappingTest' --tests 'com.shilapi.xcertplay.ActiveUsbConfigurationDiagnosticTest' --tests 'com.shilapi.xcertplay.Phase3BDeviceSettingsTest' --tests 'com.shilapi.xcertplay.DiagnosticExportUiTest'
+.\gradlew.bat :mobile:assembleDebug
+```
+
+APK: `mobile\build\outputs\apk\debug\mobile-debug.apk`.
+Corrected C2 version suffix: `-api22-phase3d2c2-complete-interface-strings`. minSdk22, global
+connections/vendor/transport gates disabled. Robolectric fixtures use SDK28;
+used Android USB getters and requests are API22-compatible.
+
+1. Remove Carlinkit.
+2. Start Geely normally.
+3. Unlock iPhone.
+4. Connect iPhone directly.
+5. Open DiPlay.
+6. In Settings/Diagnostics, run only **Inspect iPhone interface strings**.
+7. Wait for cleanup and **Save diagnostic report**.
+8. **STOP.**
+
+Do not approve Trust, run USBMUX or attempt either QDrive branch.
+Permission absent, malformed raw descriptors, unresolved native malformed-string
+behavior or cleanup failure produces an explicit UNAVAILABLE result.
+PC test strings are not E01 evidence.
+Phase 3D.2D is not implemented.
+
+### Phase 3D.2C2 regression and completion semantics
+
+The real C1 run stopped after `"PTP"` when config 2/interface 0 had
+iInterface=0. Native instruction/PLT reinspection proves the ASCII output
+is **zeroed** per entry: index zero and native-rejected string reads leave
+empty output and allow the loop to continue. C2 fixes that stop without any
+new USB operation category.
+
+The focused command above now tests PTP -> missing index -> configuration-3
+USBMUX strings -> configuration-4 USBMUX/Ethernet strings, skipping later
+alternates as QDrive does. A later successfully retrieved Valeria substring
+terminates immediately; complete known-empty/no-match scans prove FALSE.
+Individual errors are reported, not hidden. Unresolved native malformed
+memory cases continue collection but do not permit a final FALSE verdict.
+The real-car procedure and **Inspect iPhone interface strings** button are
+unchanged. No configuration selection, vendor request or transport follows.
+
+## Phase 3D.2E - controlled single QDrive vendor request
+
+See [the implementation, focused test command and controlled car procedure](PHASE3D2E_QDRIVE_VENDOR_TRANSITION_TEST.md).
+This is a separate **state-changing** diagnostic, not a continuation of the
+read-only string button. Nothing starts automatically. Run its read-only
+preflight first, then manually confirm **Test QDrive USB mode transition**.
+One `40/52/value0/index2/null/length0` request with a bounded 1000ms timeout
+is allowed; no retry. Finally-close the old connection, observe for 10 seconds,
+inspect fresh permitted Apple state read-only, save the report, and STOP.
+No configuration setter, interface claim, bulk, USBMUX, Lockdown, iAP2, MFi,
+Ethernet/NCM, AirPlay, CarPlay or Phase 3D.2F.
+
+## Phase 3D.2G - controlled configuration5 selection
+
+For the subsequent isolated claim/release experiment, see
+[Phase3D.2I procedure and focused tests](PHASE3D2I_ACTIVE_CONFIG5_USBMUX_CLAIM_TEST.md).
+It requires already-active5, one forcefalse claim/release, no bulk traffic,
+and never invokes E/G automatically.
+
+See [the configuration-only test and real-car procedure](PHASE3D2G_QDRIVE_CONFIGURATION5_TEST.md).
+Separate confirmed **Select post-Valeria configuration** action: require the
+already-transitioned five-configuration device, exact config5 Valeria, existing
+permission and active1; select actual ID5 once, GET_CONFIGURATION, observe,
+read back fresh permitted state and STOP. False setter is a STOP outcome;
+true alone is not PASS. No vendor request/retry/driver detach/claim/alternate
+change/bulk/USBMUX/Lockdown/NCM/projection follows.

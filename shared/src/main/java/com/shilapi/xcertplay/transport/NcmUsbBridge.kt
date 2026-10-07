@@ -9,7 +9,6 @@ import android.util.Log
 import java.io.Closeable
 import java.nio.ByteBuffer
 import java.util.ArrayDeque
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -38,14 +37,17 @@ class NcmUsbBridge internal constructor(
     private var loggedWriteTimeout = false
     private val frames = ArrayDeque<ByteArray>()
     private var queuedBytes = 0
-    private var buffered = ByteArray(0)
-    private var bufferedSize = 0
-    private val readBuffer = ByteArray(READ_CHUNK_BYTES)
+    private val ntbDecoder = Ntb16StreamDecoder()
+    private val requestBufferBytes = minOf(
+        READ_CHUNK_BYTES,
+        UsbTransferCompatibility.maximumTransferBytes(android.os.Build.VERSION.SDK_INT),
+    )
+    private val readBuffer = ByteArray(requestBufferBytes)
     // Bulk IN uses one persistent async request: bulkTransfer() pins its byte[] in a JNI critical
     // section for the whole wait, which blocks ART's GC thread flip and, with it, every other USB
     // transfer (seen as ~0.8 s stalls of video and audio). A timed-out request stays queued, so no
     // data is lost between calls. This is the only requestWait() user on this connection.
-    private val directReadBuffer = ByteBuffer.allocateDirect(READ_CHUNK_BYTES)
+    private val directReadBuffer = ByteBuffer.allocateDirect(requestBufferBytes)
     private var readRequest: UsbRequest? = null
     private var readQueued = false
     private val statusRunning = AtomicBoolean(statusEndpoint != null)
@@ -65,7 +67,13 @@ class NcmUsbBridge internal constructor(
             this.sequence.also { this.sequence = (this.sequence + 1) and 0xffff }
         }
         val block = Ntb16Codec.build(frame, sequence)
-        val transferred = connection.bulkTransfer(outEndpoint, block, block.size, timeoutMillis)
+        val transferred = UsbTransferCompatibility.writeFully(
+            data = block,
+            timeoutMillis = timeoutMillis,
+            maximumTransferBytes = UsbTransferCompatibility.maximumTransferBytes(android.os.Build.VERSION.SDK_INT),
+        ) { chunk, timeout ->
+            connection.bulkTransfer(outEndpoint, chunk, chunk.size, timeout)
+        }
         // Before StartCarPlaySession the phone keeps the NCM data path NAKed. Android reports the
         // resulting timeout as -1; it is not a detach and later packets must be allowed to retry.
         if (transferred <= 0) {
@@ -98,14 +106,17 @@ class NcmUsbBridge internal constructor(
 
             val deadline = System.nanoTime() + timeoutMillis * NANOS_PER_MILLISECOND
             while (true) {
-                drainFrames()
                 if (frames.isNotEmpty()) return pollFrame()
                 val remainingNanos = deadline - System.nanoTime()
                 if (remainingNanos <= 0) return null
                 val chunkLength =
                     readChunk((remainingNanos + NANOS_PER_MILLISECOND - 1) / NANOS_PER_MILLISECOND)
                         ?: continue
-                appendBuffered(readBuffer, chunkLength)
+                try {
+                    ntbDecoder.offer(readBuffer.copyOf(chunkLength)).forEach(::enqueueFrame)
+                } catch (error: IllegalArgumentException) {
+                    throw failSession(error.message ?: "Invalid NCM NTB16 data", error)
+                }
             }
         }
     }
@@ -170,39 +181,6 @@ class NcmUsbBridge internal constructor(
     private fun ByteArray.hex(limit: Int): String =
         take(limit).joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
 
-    private fun drainFrames() {
-        while (true) {
-            if (bufferedSize < 12) return
-            if (readU32(buffered, 0) != Ntb16Codec.NTH16_SIG) {
-                throw failSession("NCM read buffer does not begin with an NTB16 header")
-            }
-            val blockLength = readU16(buffered, 8)
-            if (blockLength < 28) throw failSession("Invalid NTB16 block length $blockLength")
-            val padded = blockLength % USB_PACKET_SIZE == 0
-            val wireLength = blockLength + if (padded) 1 else 0
-            if (bufferedSize < wireLength) return
-            if (padded && buffered[blockLength].toInt() != 0) {
-                throw failSession("Invalid NTB16 short-packet pad")
-            }
-            for (frame in Ntb16Codec.parse(buffered, 0, blockLength)) enqueueFrame(frame)
-            val remaining = bufferedSize - wireLength
-            buffered.copyInto(buffered, 0, wireLength, bufferedSize)
-            bufferedSize = remaining
-        }
-    }
-
-    private fun appendBuffered(source: ByteArray, length: Int) {
-        val required = bufferedSize + length
-        if (required > buffered.size) {
-            val capacity = maxOf(required, maxOf(READ_CHUNK_BYTES, buffered.size * 2))
-            val grown = ByteArray(capacity)
-            buffered.copyInto(grown, 0, 0, bufferedSize)
-            buffered = grown
-        }
-        source.copyInto(buffered, bufferedSize, 0, length)
-        bufferedSize += length
-    }
-
     private fun enqueueFrame(frame: ByteArray) {
         if (frames.size >= MAX_QUEUED_FRAMES || queuedBytes + frame.size > MAX_QUEUED_BYTES) {
             throw failSession("NCM frame queue exceeded its bounds")
@@ -232,7 +210,9 @@ class NcmUsbBridge internal constructor(
                 }
                 if (!readQueued) {
                     directReadBuffer.clear()
-                    if (!current.queue(directReadBuffer)) throw failSession("Android could not queue the NCM read request")
+                    if (!UsbTransferCompatibility.queue(current, directReadBuffer)) {
+                        throw failSession("Android could not queue the NCM read request")
+                    }
                     readQueued = true
                 }
                 current
@@ -241,12 +221,23 @@ class NcmUsbBridge internal constructor(
             throw failSession("NCM read failed", error)
         }
         try {
-            val completed = try {
-                connection.requestWait(timeoutMillis.coerceAtLeast(1))
-            } catch (_: TimeoutException) {
-                // Nothing arrived yet; the request stays queued for the next call. USBMUX owns
-                // authoritative detach/failure detection for the same phone.
-                return null
+            val waitResult = UsbTransferCompatibility.awaitUsbRequest(
+                connection = connection,
+                request = request,
+                timeoutMillis = timeoutMillis.coerceAtLeast(1),
+                buffer = directReadBuffer,
+                isClosed = { synchronized(stateLock) { closed } },
+            )
+            val completed = when (waitResult) {
+                is UsbRequestWaitResult.Completed -> waitResult.value
+                is UsbRequestWaitResult.TimedOut -> {
+                    // API 22 must cancel and drain its untimed requestWait; newer Android keeps
+                    // the pending request queued so the next receive can continue waiting.
+                    if (waitResult.requestDrained) readQueued = false
+                    return null
+                }
+                UsbRequestWaitResult.Closed ->
+                    throw IphoneUsbException.DeviceUnavailable("NCM bridge is closed")
             } ?: throw failSession("Android returned no NCM read request")
             if (completed !== request) throw failSession("Android completed an unexpected NCM request")
             readQueued = false
@@ -279,18 +270,8 @@ class NcmUsbBridge internal constructor(
         if (closed) throw IphoneUsbException.DeviceUnavailable("NCM bridge is closed")
     }
 
-    private fun readU16(source: ByteArray, offset: Int): Int =
-        (source[offset].toInt() and 0xff) or ((source[offset + 1].toInt() and 0xff) shl 8)
-
-    private fun readU32(source: ByteArray, offset: Int): Int =
-        (source[offset].toInt() and 0xff) or
-            ((source[offset + 1].toInt() and 0xff) shl 8) or
-            ((source[offset + 2].toInt() and 0xff) shl 16) or
-            ((source[offset + 3].toInt() and 0xff) shl 24)
-
     companion object {
         private const val READ_CHUNK_BYTES = 32 * 1024
-        private const val USB_PACKET_SIZE = 512
         private const val STATUS_POLL_TIMEOUT_MILLIS = 20
         private const val STATUS_POLL_INTERVAL_MILLIS = 500L
         private const val MAX_QUEUED_FRAMES = 256

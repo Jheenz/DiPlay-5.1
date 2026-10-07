@@ -104,6 +104,61 @@ class DiPlayActivity : ComponentActivity() {
     private var vendorApkExportReport = "Vendor APK export: not started"
     private var vendorApkExportText: TextView? = null
     private var vendorApkExportRunning = false
+    private var phase3b8Report = "Phase 3B.8 scanner: not started\nSTOP after collection. Static inspection on PC required before any CarPlay runtime work."
+    private var phase3b8Status = "Ready"
+    private var phase3b8StatusText: TextView? = null
+    private var phase3b8ReportText: TextView? = null
+    private var phase3b8Button: Button? = null
+    private var phase3b8Running = false
+    private var passiveI2cInventoryReport = "Phase 3C.3C passive I2C inventory: not run"
+    private var passiveI2cInventoryText: TextView? = null
+    private var passiveI2cInventoryButton: Button? = null
+    private var passiveI2cInventoryRunning = false
+    private var passiveUsbInventory: PassiveUsbInventory? = null
+    private var passiveUsbReport = PassiveUsbDeviceDiagnostic.NOT_RUN
+    private var passiveUsbText: TextView? = null
+    private var passiveUsbButton: Button? = null
+    private var passiveUsbRunning = false
+    private var usbConfigurationReport = PassiveUsbDeviceDiagnostic.MAPPING_NOT_RUN
+    private var usbConfigurationText: TextView? = null
+    private var usbConfigurationButton: Button? = null
+    private var usbConfigurationRunning = false
+    private var activeUsbConfigurationAccess: ActiveUsbConfigurationAccess? = null
+    private var activeUsbConfigurationReport = ActiveUsbConfigurationDiagnostic.NOT_RUN
+    private var activeUsbConfigurationText: TextView? = null
+    private var activeUsbConfigurationButton: Button? = null
+    private var activeUsbConfigurationRunning = false
+    private var qdriveDescriptorAccess: QDriveDescriptorAccess? = null
+    private var qdriveDescriptorReport = QDriveBranchDiagnostic.NOT_RUN
+    private var qdriveDescriptorText: TextView? = null
+    private var qdriveDescriptorButton: Button? = null
+    private var qdriveDescriptorRunning = false
+    private var qdriveTransitionAccess: QDriveTransitionAccess? = null
+    private var qdriveTransitionDiagnostic: QDriveVendorTransitionDiagnostic? = null
+    private var qdriveTransitionPrepared: PassiveUsbDevice? = null
+    private var qdriveTransitionReport = QDriveVendorTransitionDiagnostic.NOT_RUN
+    private var qdriveTransitionText: TextView? = null
+    private var qdriveTransitionPreflightButton: Button? = null
+    private var qdriveTransitionButton: Button? = null
+    private var qdriveTransitionRunning = false
+    private var qdriveConfigurationAccess: QDriveConfigurationAccess? = null
+    private var qdriveConfigurationDiagnostic: QDriveConfigurationDiagnostic? = null
+    private var qdriveConfigurationReport = QDriveConfigurationDiagnostic.NOT_RUN
+    private var qdriveConfigurationText: TextView? = null
+    private var qdriveConfigurationButton: Button? = null
+    private var qdriveConfigurationRunning = false
+    private var activeConfig5ClaimAccess: ActiveConfig5UsbMuxClaimAccess? = null
+    private var activeConfig5ClaimDiagnostic: ActiveConfig5UsbMuxClaimDiagnostic? = null
+    private var activeConfig5ClaimReport = ActiveConfig5UsbMuxClaimDiagnostic.NOT_RUN
+    private var activeConfig5ClaimText: TextView? = null
+    private var activeConfig5ClaimButton: Button? = null
+    private var activeConfig5ClaimRunning = false
+    private var directUsbMuxAccess: com.shilapi.xcertplay.transport.DirectUsbMuxAccess? = null
+    private var directUsbMuxDiagnostic: com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic? = null
+    private var directUsbMuxReport = com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic.NOT_RUN
+    private var directUsbMuxText: TextView? = null
+    private var directUsbMuxButton: Button? = null
+    private var directUsbMuxRunning = false
     private var phase3BGeneration = 0
     private var phase3BPendingAction = "refresh"
     private var phase3BGrantedAction: String? = null
@@ -291,6 +346,12 @@ class DiPlayActivity : ComponentActivity() {
         }
     }
     override fun onPause() {
+        qdriveTransitionDiagnostic?.cancel()
+        qdriveConfigurationDiagnostic?.cancel()
+        activeConfig5ClaimDiagnostic?.cancel()
+        qdriveTransitionPrepared = null
+        qdriveTransitionButton?.isEnabled = false
+        directUsbMuxDiagnostic?.takeIf { directUsbMuxRunning }?.cancel("Activity paused — STOP")
         nforetekCacheDiagnostics?.let { it.close(); nforetekCacheReport = it.diagnosticReport() }
         nforetekCacheDiagnostics = null
         nforetekCacheRunning = false
@@ -313,6 +374,9 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        qdriveTransitionDiagnostic?.cancel()
+        qdriveConfigurationDiagnostic?.cancel()
+        directUsbMuxDiagnostic?.takeIf { directUsbMuxRunning }?.cancel("Activity destroyed — STOP")
         nforetekCacheDiagnostics?.close()
         nforetekCacheDiagnostics = null
         nforetekCacheGeneration++
@@ -352,6 +416,11 @@ class DiPlayActivity : ComponentActivity() {
         nforetekCacheText = null
         nforetekCacheButton = null
         vendorApkExportText = null
+        phase3b8StatusText = null
+        phase3b8ReportText = null
+        phase3b8Button = null
+        passiveI2cInventoryText = null
+        passiveI2cInventoryButton = null
         // A pending assignment belongs to the widgets being replaced, never to another page.
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         // A restore still waiting for layout keeps its target: the old page was never laid out.
@@ -955,6 +1024,120 @@ class DiPlayActivity : ComponentActivity() {
                     exportVendorApks(appleDiscovery = true)
                 }, matchButton())
             }
+            section(content, getString(R.string.phase3b8_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3b8_warning), 16, WARNING))
+                phase3b8StatusText = label(phase3b8Status, 15, TEXT)
+                card.addView(phase3b8StatusText)
+                phase3b8ReportText = label(phase3b8Report, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(phase3b8ReportText)
+                phase3b8Button = button(
+                    if (phase3b8Running) getString(R.string.phase3b8_scanning)
+                    else getString(R.string.phase3b8_run), false,
+                ) { runPhase3B8Inventory() }.apply { isEnabled = !phase3b8Running }
+                card.addView(phase3b8Button, matchButton())
+            }
+            section(content, getString(R.string.phase3d2_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2_help), 16, WARNING))
+                directUsbMuxText = label(directUsbMuxReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(directUsbMuxText)
+                directUsbMuxButton = button(
+                    if (directUsbMuxRunning) getString(R.string.phase3d2_running)
+                    else getString(R.string.phase3d2_test), false,
+                ) { runDirectUsbMuxDiagnostic() }.apply { isEnabled = !directUsbMuxRunning }
+                card.addView(directUsbMuxButton, matchButton())
+                card.addView(button(getString(R.string.phase3d2_cancel), false) {
+                    stopDirectUsbMuxDiagnostic("User cancelled — STOP")
+                }, matchButton())
+                card.addView(button(getString(R.string.phase3d2_trust_stop), false) {
+                    stopDirectUsbMuxDiagnostic("Trust prompt observed by user — STOP; do not approve")
+                }, matchButton())
+            }
+            section(content, getString(R.string.phase3d2i_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2i_warning), 18, WARNING))
+                activeConfig5ClaimText = label(activeConfig5ClaimReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(activeConfig5ClaimText)
+                activeConfig5ClaimButton = button(getString(R.string.phase3d2i_claim), false) {
+                    confirmActiveConfig5UsbMuxClaim()
+                }.apply { setTextColor(WARNING); isEnabled = !activeConfig5ClaimRunning }
+                card.addView(activeConfig5ClaimButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2g_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2g_warning), 18, WARNING))
+                qdriveConfigurationText = label(qdriveConfigurationReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(qdriveConfigurationText)
+                qdriveConfigurationButton = button(getString(R.string.phase3d2g_select), false) {
+                    confirmQDriveConfiguration()
+                }.apply { setTextColor(WARNING); isEnabled = !qdriveConfigurationRunning }
+                card.addView(qdriveConfigurationButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2e_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2e_warning), 18, WARNING))
+                card.addView(label(getString(R.string.phase3d2e_help), 16, WARNING))
+                qdriveTransitionText = label(qdriveTransitionReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(qdriveTransitionText)
+                qdriveTransitionPreflightButton = button(getString(R.string.phase3d2e_preflight), false) {
+                    runQDriveTransitionPreflight()
+                }.apply { isEnabled = !qdriveTransitionRunning }
+                card.addView(qdriveTransitionPreflightButton, matchButton())
+                qdriveTransitionButton = button(getString(R.string.phase3d2e_test), false) {
+                    confirmQDriveTransition()
+                }.apply {
+                    setTextColor(WARNING)
+                    isEnabled = !qdriveTransitionRunning && qdriveTransitionPrepared != null
+                }
+                card.addView(qdriveTransitionButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2c1_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2c1_help), 16, WARNING))
+                qdriveDescriptorText = label(qdriveDescriptorReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(qdriveDescriptorText)
+                qdriveDescriptorButton = button(
+                    if (qdriveDescriptorRunning) getString(R.string.phase3d2c1_running)
+                    else getString(R.string.phase3d2c1_inspect), false,
+                ) { inspectIphoneInterfaceStrings() }.apply { isEnabled = !qdriveDescriptorRunning }
+                card.addView(qdriveDescriptorButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2b_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2b_help), 16, WARNING))
+                activeUsbConfigurationText = label(activeUsbConfigurationReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(activeUsbConfigurationText)
+                activeUsbConfigurationButton = button(
+                    if (activeUsbConfigurationRunning) getString(R.string.phase3d2b_running)
+                    else getString(R.string.phase3d2b_read), false,
+                ) { readActiveUsbConfiguration() }.apply { isEnabled = !activeUsbConfigurationRunning }
+                card.addView(activeUsbConfigurationButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2a_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2a_help), 16, WARNING))
+                usbConfigurationText = label(usbConfigurationReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(usbConfigurationText)
+                usbConfigurationButton = button(
+                    if (usbConfigurationRunning) getString(R.string.phase3d1_running)
+                    else getString(R.string.phase3d2a_map), false,
+                ) { runPassiveUsbScan(configurationMapping = true) }.apply { isEnabled = !usbConfigurationRunning }
+                card.addView(usbConfigurationButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d1_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d1_help), 16, MUTED))
+                passiveUsbText = label(passiveUsbReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(passiveUsbText)
+                passiveUsbButton = button(
+                    if (passiveUsbRunning) getString(R.string.phase3d1_running)
+                    else getString(R.string.phase3d1_scan), false,
+                ) { runPassiveUsbInventory() }.apply { isEnabled = !passiveUsbRunning }
+                card.addView(passiveUsbButton, matchButton())
+            }
+            section(content, getString(R.string.phase3c3c_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3c3c_help), 16, MUTED))
+                passiveI2cInventoryText = label(passiveI2cInventoryReport, 14, MUTED)
+                    .apply { setTextIsSelectable(true) }
+                card.addView(passiveI2cInventoryText)
+                passiveI2cInventoryButton = button(
+                    if (passiveI2cInventoryRunning) getString(R.string.phase3c3c_running)
+                    else getString(R.string.phase3c3c_run), false,
+                ) { runPassiveI2cInventory() }.apply { isEnabled = !passiveI2cInventoryRunning }
+                card.addView(passiveI2cInventoryButton, matchButton())
+            }
             section(content, getString(R.string.phase3b3_cache_title), R.drawable.ic_dp_diagnostics) { card ->
                 card.addView(label(getString(R.string.phase3b3_cache_help), 16, MUTED))
                 nforetekCacheText = label(nforetekCacheReport, 15, TEXT).apply { setTextIsSelectable(true) }
@@ -1051,6 +1234,434 @@ class DiPlayActivity : ComponentActivity() {
                 if (!isFinishing && !isDestroyed) vendorApkExportText?.text = result
             }
         }, "diplay-vendor-apk-export").start()
+    }
+
+    private fun runPhase3B8Inventory() {
+        if (phase3b8Running) return
+        phase3b8Running = true
+        phase3b8Status = getString(R.string.phase3b8_scanning)
+        phase3b8Report = phase3b8Status
+        phase3b8StatusText?.text = phase3b8Status
+        phase3b8ReportText?.text = phase3b8Report
+        phase3b8Button?.apply {
+            isEnabled = false
+            text = getString(R.string.phase3b8_scanning)
+        }
+
+        val app = applicationContext
+        Thread({
+            val result = try {
+                FullCarPlaySystemInventory().scanDevice(app) { progress ->
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) phase3b8StatusText?.text = progress
+                    }
+                }
+            } catch (error: Exception) {
+                FullCarPlaySystemInventory.ScanResult(
+                    "Phase 3B.8 scan failed: ${error.javaClass.simpleName}: ${error.message}\n" +
+                        "STOP after collection. Static inspection on PC required before any CarPlay runtime work.",
+                    true, 0, 1, emptyList(),
+                )
+            } catch (error: LinkageError) {
+                FullCarPlaySystemInventory.ScanResult(
+                    "Phase 3B.8 scan failed: ${error.javaClass.simpleName}: ${error.message}\n" +
+                        "STOP after collection. Static inspection on PC required before any CarPlay runtime work.",
+                    true, 0, 1, emptyList(),
+                )
+            }
+            runOnUiThread {
+                phase3b8Running = false
+                phase3b8Status = if (result.hasErrors) getString(R.string.phase3b8_completed_errors)
+                    else getString(R.string.phase3b8_completed)
+                phase3b8Report = result.report
+                if (!isFinishing && !isDestroyed) {
+                    phase3b8StatusText?.text = phase3b8Status
+                    phase3b8ReportText?.text = phase3b8Report
+                    phase3b8Button?.apply {
+                        isEnabled = true
+                        text = getString(R.string.phase3b8_run)
+                    }
+                }
+            }
+        }, "diplay-phase3b8-inventory").start()
+    }
+
+    private fun stopDirectUsbMuxDiagnostic(reason: String) {
+        val diagnostic = directUsbMuxDiagnostic ?: return
+        diagnostic.cancel(reason)
+        directUsbMuxReport = diagnostic.report()
+        directUsbMuxText?.text = directUsbMuxReport
+    }
+
+    private fun runDirectUsbMuxDiagnostic() {
+        if (directUsbMuxRunning) return
+        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning) {
+            toast(getString(R.string.phase3d2c1_busy))
+            return
+        }
+        qdriveTransitionPrepared = null
+        qdriveTransitionButton?.isEnabled = false
+        if (qdriveDescriptorRunning) {
+            toast(getString(R.string.phase3d2c1_busy))
+            return
+        }
+        if (activeUsbConfigurationRunning) {
+            toast(getString(R.string.phase3d2b_read_running))
+            return
+        }
+        val app = applicationContext
+        val access = directUsbMuxAccess ?: object : com.shilapi.xcertplay.transport.DirectUsbMuxAccess {
+            private fun adapter(): com.shilapi.xcertplay.transport.AndroidDirectUsbMuxAccess {
+                val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                    ?: throw IllegalStateException("Android USB host service is unavailable")
+                return com.shilapi.xcertplay.transport.AndroidDirectUsbMuxAccess(manager)
+            }
+            override fun devices() = adapter().devices()
+            override fun hasPermission(device: android.hardware.usb.UsbDevice) = adapter().hasPermission(device)
+            override fun open(
+                device: android.hardware.usb.UsbDevice,
+                selection: com.shilapi.xcertplay.transport.DirectUsbMuxSelection,
+                report: (String) -> Unit,
+            ) = adapter().open(device, selection, report)
+        }
+        val diagnostic = com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic(access)
+        directUsbMuxDiagnostic = diagnostic
+        directUsbMuxRunning = true
+        directUsbMuxReport = "${getString(R.string.phase3d2_running)}\n${com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic.SAFETY}"
+        directUsbMuxText?.text = directUsbMuxReport
+        directUsbMuxButton?.apply { isEnabled = false; text = getString(R.string.phase3d2_running) }
+        Thread({
+            val report = diagnostic.run()
+            runOnUiThread {
+                directUsbMuxRunning = false
+                directUsbMuxReport = report
+                if (!isFinishing && !isDestroyed) {
+                    directUsbMuxText?.text = report
+                    directUsbMuxButton?.apply {
+                        isEnabled = true
+                        text = getString(R.string.phase3d2_test)
+                    }
+                }
+            }
+        }, "diplay-direct-usbmux-diagnostic").start()
+    }
+
+    private fun readActiveUsbConfiguration() {
+        if (activeUsbConfigurationRunning) return
+        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning) {
+            toast(getString(R.string.phase3d2c1_busy))
+            return
+        }
+        if (qdriveDescriptorRunning) {
+            toast(getString(R.string.phase3d2c1_busy))
+            return
+        }
+        if (directUsbMuxRunning) {
+            toast(getString(R.string.phase3d2b_transport_running))
+            return
+        }
+        activeUsbConfigurationRunning = true
+        activeUsbConfigurationReport = "${getString(R.string.phase3d2b_running)}\n${ActiveUsbConfigurationDiagnostic.SAFETY}"
+        activeUsbConfigurationText?.text = activeUsbConfigurationReport
+        activeUsbConfigurationButton?.apply { isEnabled = false; text = getString(R.string.phase3d2b_running) }
+        val app = applicationContext
+        val access = activeUsbConfigurationAccess ?: object : ActiveUsbConfigurationAccess {
+            private fun adapter(): AndroidActiveUsbConfigurationAccess {
+                val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                    ?: throw IllegalStateException("Android USB host service is unavailable")
+                return AndroidActiveUsbConfigurationAccess(manager)
+            }
+            override fun devices() = adapter().devices()
+            override fun readConfiguration(device: PassiveUsbDevice, report: (String) -> Unit) =
+                adapter().readConfiguration(device, report)
+        }
+        Thread({
+            val report = ActiveUsbConfigurationDiagnostic(access).scan()
+            runOnUiThread {
+                activeUsbConfigurationRunning = false
+                activeUsbConfigurationReport = report
+                if (!isFinishing && !isDestroyed) {
+                    activeUsbConfigurationText?.text = report
+                    activeUsbConfigurationButton?.apply {
+                        isEnabled = true
+                        text = getString(R.string.phase3d2b_read)
+                    }
+                }
+            }
+        }, "diplay-get-usb-configuration").start()
+    }
+
+    private fun inspectIphoneInterfaceStrings() {
+        if (qdriveDescriptorRunning) return
+        if (directUsbMuxRunning || activeUsbConfigurationRunning || qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning) {
+            toast(getString(R.string.phase3d2c1_busy))
+            return
+        }
+        qdriveDescriptorRunning = true
+        qdriveDescriptorReport = "${getString(R.string.phase3d2c1_running)}\n${QDriveBranchDiagnostic.SAFETY}"
+        qdriveDescriptorText?.text = qdriveDescriptorReport
+        qdriveDescriptorButton?.apply { isEnabled = false; text = getString(R.string.phase3d2c1_running) }
+        val app = applicationContext
+        val access = qdriveDescriptorAccess ?: object : QDriveDescriptorAccess {
+            private fun adapter(): AndroidQDriveDescriptorAccess {
+                val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                    ?: throw IllegalStateException("Android USB host service is unavailable")
+                return AndroidQDriveDescriptorAccess(manager)
+            }
+            override fun devices() = adapter().devices()
+            override fun inspect(device: PassiveUsbDevice, report: (String) -> Unit) = adapter().inspect(device, report)
+        }
+        Thread({
+            val report = QDriveBranchDiagnostic(access).scan()
+            runOnUiThread {
+                qdriveDescriptorRunning = false
+                qdriveDescriptorReport = report
+                if (!isFinishing && !isDestroyed) {
+                    qdriveDescriptorText?.text = report
+                    qdriveDescriptorButton?.apply {
+                        isEnabled = true
+                        text = getString(R.string.phase3d2c1_inspect)
+                    }
+                }
+            }
+        }, "diplay-interface-strings").start()
+    }
+
+    private fun qdriveTransitionBusy(): Boolean {
+        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning || directUsbMuxRunning || activeUsbConfigurationRunning || qdriveDescriptorRunning) {
+            toast(getString(R.string.phase3d2c1_busy))
+            return true
+        }
+        return false
+    }
+
+    private fun newQDriveTransitionDiagnostic(): QDriveVendorTransitionDiagnostic {
+        val app = applicationContext
+        val access = qdriveTransitionAccess ?: object : QDriveTransitionAccess {
+            private fun adapter(): AndroidQDriveTransitionAccess {
+                val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                    ?: throw IllegalStateException("Android USB host service is unavailable")
+                return AndroidQDriveTransitionAccess(app, manager)
+            }
+
+            override fun devices() = adapter().devices()
+            override fun open(device: PassiveUsbDevice) = adapter().open(device)
+            override fun observe(onEvent: (QDriveUsbEvent) -> Unit) = adapter().observe(onEvent)
+        }
+        return QDriveVendorTransitionDiagnostic(access)
+    }
+
+    private fun confirmActiveConfig5UsbMuxClaim() {
+        if (qdriveTransitionBusy()) return
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.phase3d2i_claim))
+            .setMessage(getString(R.string.phase3d2i_confirm))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(getString(R.string.phase3d2i_send)) { _, _ ->
+                if (qdriveTransitionBusy()) return@setPositiveButton
+                val app = applicationContext
+                val access = activeConfig5ClaimAccess ?: object : ActiveConfig5UsbMuxClaimAccess {
+                    private fun adapter(): AndroidActiveConfig5UsbMuxClaimAccess {
+                        val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                            ?: error("Android USB host service unavailable")
+                        return AndroidActiveConfig5UsbMuxClaimAccess(manager)
+                    }
+                    override fun devices() = adapter().devices()
+                    override fun open(device: PassiveUsbDevice) = adapter().open(device)
+                }
+                val diagnostic = ActiveConfig5UsbMuxClaimDiagnostic(access)
+                activeConfig5ClaimDiagnostic = diagnostic
+                activeConfig5ClaimRunning = true
+                activeConfig5ClaimButton?.isEnabled = false
+                qdriveTransitionPrepared = null
+                qdriveTransitionButton?.isEnabled = false
+                activeConfig5ClaimReport = "${getString(R.string.phase3d2i_running)}\n${ActiveConfig5UsbMuxClaimDiagnostic.SAFETY}"
+                activeConfig5ClaimText?.text = activeConfig5ClaimReport
+                Thread({
+                    val report = diagnostic.run()
+                    runOnUiThread {
+                        activeConfig5ClaimRunning = false
+                        activeConfig5ClaimReport = report
+                        if (!isFinishing && !isDestroyed) {
+                            activeConfig5ClaimText?.text = report
+                            activeConfig5ClaimButton?.isEnabled = true
+                        }
+                    }
+                }, "diplay-config5-usbmux-claim-only").start()
+            }.show()
+    }
+
+    private fun confirmQDriveConfiguration() {
+        if (qdriveTransitionBusy()) return
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.phase3d2g_select))
+            .setMessage(getString(R.string.phase3d2g_confirm))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(getString(R.string.phase3d2g_send)) { _, _ ->
+                if (qdriveTransitionBusy()) return@setPositiveButton
+                val app = applicationContext
+                val access = qdriveConfigurationAccess ?: object : QDriveConfigurationAccess {
+                    private fun adapter(): AndroidQDriveConfigurationAccess {
+                        val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                            ?: error("Android USB host service unavailable")
+                        return AndroidQDriveConfigurationAccess(app, manager)
+                    }
+                    override fun devices() = adapter().devices()
+                    override fun open(device: PassiveUsbDevice, selectionAllowed: Boolean) =
+                        adapter().open(device, selectionAllowed)
+                    override fun observe(onEvent: (QDriveUsbEvent) -> Unit) = adapter().observe(onEvent)
+                }
+                val diagnostic = QDriveConfigurationDiagnostic(access)
+                qdriveConfigurationDiagnostic = diagnostic
+                qdriveConfigurationRunning = true
+                qdriveConfigurationButton?.isEnabled = false
+                qdriveTransitionPrepared = null
+                qdriveTransitionButton?.isEnabled = false
+                qdriveConfigurationReport = "${getString(R.string.phase3d2g_running)}\n${QDriveConfigurationDiagnostic.SAFETY}"
+                qdriveConfigurationText?.text = qdriveConfigurationReport
+                Thread({
+                    val report = diagnostic.run()
+                    runOnUiThread {
+                        qdriveConfigurationRunning = false
+                        qdriveConfigurationReport = report
+                        if (!isFinishing && !isDestroyed) {
+                            qdriveConfigurationText?.text = report
+                            qdriveConfigurationButton?.isEnabled = true
+                        }
+                    }
+                }, "diplay-qdrive-config5-only").start()
+            }.show()
+    }
+    private fun setQDriveTransitionRunning() {
+        qdriveTransitionRunning = true
+        qdriveTransitionPrepared = null
+        qdriveTransitionPreflightButton?.isEnabled = false
+        qdriveTransitionButton?.isEnabled = false
+        qdriveTransitionReport = "${getString(R.string.phase3d2e_running)}\n${QDriveVendorTransitionDiagnostic.SAFETY}"
+        qdriveTransitionText?.text = qdriveTransitionReport
+    }
+
+    private fun runQDriveTransitionPreflight() {
+        if (qdriveTransitionBusy()) return
+        val diagnostic = newQDriveTransitionDiagnostic()
+        qdriveTransitionDiagnostic = diagnostic
+        setQDriveTransitionRunning()
+        Thread({
+            val result = diagnostic.preflight()
+            runOnUiThread {
+                qdriveTransitionRunning = false
+                qdriveTransitionReport = result.report
+                if (!isFinishing && !isDestroyed && lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                    qdriveTransitionPrepared = result.device
+                    qdriveTransitionText?.text = result.report
+                    qdriveTransitionPreflightButton?.isEnabled = true
+                    qdriveTransitionButton?.isEnabled = result.device != null
+                }
+            }
+        }, "diplay-qdrive-transition-preflight").start()
+    }
+
+    private fun confirmQDriveTransition() {
+        if (qdriveTransitionBusy()) return
+        val prepared = qdriveTransitionPrepared ?: return
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.phase3d2e_test))
+            .setMessage(getString(R.string.phase3d2e_confirm))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(getString(R.string.phase3d2e_send)) { _, _ ->
+                if (qdriveTransitionPrepared != prepared || qdriveTransitionBusy()) return@setPositiveButton
+                val diagnostic = newQDriveTransitionDiagnostic()
+                qdriveTransitionDiagnostic = diagnostic
+                setQDriveTransitionRunning()
+                Thread({
+                    val report = diagnostic.run(prepared)
+                    runOnUiThread {
+                        qdriveTransitionRunning = false
+                        qdriveTransitionReport = report
+                        if (!isFinishing && !isDestroyed) {
+                            qdriveTransitionText?.text = report
+                            qdriveTransitionPreflightButton?.isEnabled = true
+                            qdriveTransitionButton?.isEnabled = false
+                        }
+                    }
+                }, "diplay-qdrive-single-vendor-request").start()
+            }.show()
+    }
+
+    private fun runPassiveUsbInventory() = runPassiveUsbScan(configurationMapping = false)
+
+    private fun runPassiveUsbScan(configurationMapping: Boolean) {
+        if (if (configurationMapping) usbConfigurationRunning else passiveUsbRunning) return
+        val pending = "${getString(R.string.phase3d1_running)}\n${PassiveUsbDeviceDiagnostic.SAFETY}"
+        if (configurationMapping) {
+            usbConfigurationRunning = true
+            usbConfigurationReport = pending
+            usbConfigurationText?.text = pending
+        } else {
+            passiveUsbRunning = true
+            passiveUsbReport = pending
+            passiveUsbText?.text = pending
+        }
+        (if (configurationMapping) usbConfigurationButton else passiveUsbButton)?.apply {
+            isEnabled = false
+            text = getString(R.string.phase3d1_running)
+        }
+        val app = applicationContext
+        val inventory = passiveUsbInventory ?: PassiveUsbInventory {
+            val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                ?: throw IllegalStateException("Android USB host service is unavailable")
+            AndroidPassiveUsbInventory(manager).snapshot()
+        }
+        Thread({
+            val report = PassiveUsbDeviceDiagnostic(inventory, configurationMapping).scan()
+            runOnUiThread {
+                if (configurationMapping) {
+                    usbConfigurationRunning = false
+                    usbConfigurationReport = report
+                } else {
+                    passiveUsbRunning = false
+                    passiveUsbReport = report
+                }
+                if (!isFinishing && !isDestroyed) {
+                    (if (configurationMapping) usbConfigurationText else passiveUsbText)?.text = report
+                    (if (configurationMapping) usbConfigurationButton else passiveUsbButton)?.apply {
+                        isEnabled = true
+                        text = getString(if (configurationMapping) R.string.phase3d2a_map else R.string.phase3d1_scan)
+                    }
+                }
+            }
+        }, if (configurationMapping) "diplay-passive-usb-mapping" else "diplay-passive-usb-inventory").start()
+    }
+
+    private fun runPassiveI2cInventory() {
+        if (passiveI2cInventoryRunning) return
+        passiveI2cInventoryRunning = true
+        passiveI2cInventoryReport = getString(R.string.phase3c3c_running)
+        passiveI2cInventoryText?.text = passiveI2cInventoryReport
+        passiveI2cInventoryButton?.apply {
+            isEnabled = false
+            text = getString(R.string.phase3c3c_running)
+        }
+        Thread({
+            val report = try {
+                PassiveMfiI2cInventory().scan()
+            } catch (error: Exception) {
+                "Phase 3C.3C inventory failed: ${error.javaClass.simpleName}: ${error.message}"
+            } catch (error: LinkageError) {
+                "Phase 3C.3C inventory failed: ${error.javaClass.simpleName}: ${error.message}"
+            }
+            runOnUiThread {
+                passiveI2cInventoryRunning = false
+                passiveI2cInventoryReport = report
+                if (!isFinishing && !isDestroyed) {
+                    passiveI2cInventoryText?.text = report
+                    passiveI2cInventoryButton?.apply {
+                        isEnabled = true
+                        text = getString(R.string.phase3c3c_run)
+                    }
+                }
+            }
+        }, "diplay-passive-i2c-inventory").start()
     }
 
     private fun nforetekAction(bind: Boolean) {
@@ -3027,6 +3638,16 @@ class DiPlayActivity : ComponentActivity() {
         val nforetekBluetoothDiagnostics = nforetekReport
         val nforetekCacheStatus = nforetekCacheReport
         val vendorApkDiagnostics = vendorApkExportReport
+        val phase3b8Diagnostics = phase3b8Report
+        val passiveI2cDiagnostics = passiveI2cInventoryReport
+        val passiveUsbDiagnostics = passiveUsbReport
+        val directUsbMuxDiagnostics = directUsbMuxDiagnostic?.report() ?: directUsbMuxReport
+        val usbConfigurationDiagnostics = usbConfigurationReport
+        val activeUsbConfigurationDiagnostics = activeUsbConfigurationReport
+        val qdriveDescriptorDiagnostics = qdriveDescriptorReport
+        val qdriveTransitionDiagnostics = qdriveTransitionReport
+        val qdriveConfigurationDiagnostics = qdriveConfigurationReport
+        val activeConfig5ClaimDiagnostics = activeConfig5ClaimReport
         Thread({
             val result = runCatching {
                 val report = buildString {
@@ -3050,6 +3671,22 @@ class DiPlayActivity : ComponentActivity() {
                         appendLine(nforetekCacheStatus)
                         appendLine("--- Vendor Bluetooth APK export ---")
                         appendLine(vendorApkDiagnostics)
+                        appendLine("--- Phase 3B.8 full E01 CarPlay system inventory ---")
+                        appendLine(phase3b8Diagnostics)
+                        appendLine("--- Phase 3C.3C passive MFi/I2C inventory ---")
+                        appendLine(passiveI2cDiagnostics)
+                        appendLine("--- Phase 3D.1 direct iPhone USB detection ---")
+                        appendLine(passiveUsbDiagnostics)
+                        appendLine("--- Phase 3D.2 direct USBMUX/Lockdown test ---")
+                        appendLine(directUsbMuxDiagnostics)
+                        appendLine("--- Phase 3D.2A passive iPhone USB configuration mapping ---")
+                        appendLine(usbConfigurationDiagnostics)
+                        appendLine("--- Phase 3D.2B read-only active iPhone USB configuration ---")
+                        appendLine(activeUsbConfigurationDiagnostics)
+                        appendLine(qdriveDescriptorDiagnostics)
+                        appendLine(qdriveTransitionDiagnostics)
+                        appendLine(qdriveConfigurationDiagnostics)
+                        appendLine(activeConfig5ClaimDiagnostics)
                         return@buildString
                     }
                     appendLine("DiPlay ${version()} · private beta diagnostic report")
@@ -3120,6 +3757,20 @@ class DiPlayActivity : ComponentActivity() {
                             file.useLines { lines -> lines.forEach { line -> DiagnosticRedactor.redact(line)?.let { appendLine(it) } } }
                         }
                     }
+                    appendLine()
+                    appendLine("--- Phase 3B.8 full E01 CarPlay system inventory ---")
+                    appendLine(phase3b8Diagnostics)
+                    appendLine("--- Phase 3D.1 direct iPhone USB detection ---")
+                    appendLine(passiveUsbDiagnostics)
+                    appendLine("--- Phase 3D.2 direct USBMUX/Lockdown test ---")
+                    appendLine(directUsbMuxDiagnostics)
+                    appendLine("--- Phase 3D.2A passive iPhone USB configuration mapping ---")
+                    appendLine(usbConfigurationDiagnostics)
+                    appendLine("--- Phase 3D.2B read-only active iPhone USB configuration ---")
+                    appendLine(activeUsbConfigurationDiagnostics)
+                    appendLine(qdriveDescriptorDiagnostics)
+                    appendLine(qdriveTransitionDiagnostics)
+                    appendLine(qdriveConfigurationDiagnostics)
                 }
                 val savedReport = if (uri != null) {
                     DiagnosticExportStore.write(appContext.contentResolver, uri, report)

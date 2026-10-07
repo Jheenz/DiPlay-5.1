@@ -51,10 +51,13 @@ object IphoneCarPlayConfiguration {
 
     fun usbMuxInterface(configuration: UsbConfiguration): UsbInterface? =
         (0 until configuration.interfaceCount).map(configuration::getInterface).firstOrNull {
-            it.interfaceClass == USBMUX_CLASS &&
-                it.interfaceSubclass == USBMUX_SUBCLASS &&
-                it.interfaceProtocol == USBMUX_PROTOCOL
+            isUsbMuxInterface(it)
         }
+
+    fun isUsbMuxInterface(usbInterface: UsbInterface): Boolean =
+        usbInterface.interfaceClass == USBMUX_CLASS &&
+            usbInterface.interfaceSubclass == USBMUX_SUBCLASS &&
+            usbInterface.interfaceProtocol == USBMUX_PROTOCOL
 
     fun usbMuxEndpoints(usbInterface: UsbInterface): Pair<UsbEndpoint, UsbEndpoint>? {
         val endpoints = (0 until usbInterface.endpointCount).map(usbInterface::getEndpoint)

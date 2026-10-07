@@ -19,7 +19,6 @@ import java.io.Closeable
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.util.concurrent.Executor
-import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Exact Apple USB identities allowed by the deployment configuration. */
@@ -285,7 +284,7 @@ class IphoneUsbHost(
             appContext,
             0,
             intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            UsbTransferCompatibility.permissionPendingIntentFlags(Build.VERSION.SDK_INT),
         )
     }
 
@@ -330,7 +329,7 @@ class Iap2UsbSession internal constructor(
     private val connection: UsbDeviceConnection,
     private val outEndpoint: UsbEndpoint,
     private val inEndpoint: UsbEndpoint,
-) : Closeable {
+) : UsbMuxBulkPipe {
     private val stateLock = Any()
     private val readLock = Any()
     private val writeLock = Any()
@@ -338,11 +337,22 @@ class Iap2UsbSession internal constructor(
     private var failure: IphoneUsbException? = null
     private var pendingRead: UsbRequest? = null
 
-    fun write(data: ByteArray, timeoutMillis: Int) = synchronized(writeLock) {
+    override fun write(data: ByteArray, timeoutMillis: Int) = synchronized(writeLock) {
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         if (data.isEmpty()) return@synchronized
-        val transferred = connection.bulkTransfer(outEndpoint, data, data.size, timeoutMillis)
+        val deadline = System.nanoTime() + timeoutMillis * 1_000_000L
+        val transferred = UsbTransferCompatibility.writeFully(
+            data = data,
+            timeoutMillis = timeoutMillis,
+            maximumTransferBytes = UsbTransferCompatibility.maximumTransferBytes(Build.VERSION.SDK_INT),
+        ) { chunk, timeout ->
+            checkOpen()
+            val remainingNanos = deadline - System.nanoTime()
+            if (remainingNanos <= 0) throw IphoneUsbException.TimedOut("USBMUX write timed out")
+            val remainingMillis = ((remainingNanos + 999_999L) / 1_000_000L).toInt()
+            connection.bulkTransfer(outEndpoint, chunk, chunk.size, minOf(timeout, remainingMillis))
+        }
         if (transferred != data.size) {
             throw IphoneUsbException.DeviceUnavailable(
                 "USBMUX write transferred $transferred of ${data.size} bytes",
@@ -351,7 +361,7 @@ class Iap2UsbSession internal constructor(
     }
 
     /** Returns null only when no completed USB request arrives before [timeoutMillis]. */
-    fun read(timeoutMillis: Long): ByteArray? = synchronized(readLock) {
+    override fun read(timeoutMillis: Long): ByteArray? = synchronized(readLock) {
         checkOpen()
         require(timeoutMillis > 0) { "timeoutMillis must be positive" }
         val request = UsbRequest()
@@ -367,17 +377,31 @@ class Iap2UsbSession internal constructor(
                 checkOpenLocked()
                 pendingRead = request
             }
-            val buffer = ByteBuffer.allocateDirect(USBMUX_READ_CHUNK_BYTES)
-            if (!request.queue(buffer)) {
+            val buffer = ByteBuffer.allocateDirect(
+                minOf(
+                    USBMUX_READ_CHUNK_BYTES,
+                    UsbTransferCompatibility.maximumTransferBytes(Build.VERSION.SDK_INT),
+                ),
+            )
+            if (!UsbTransferCompatibility.queue(request, buffer)) {
                 throw IphoneUsbException.DeviceUnavailable(
                     "Android could not queue USBMUX read request (${requestDiagnostics(timeoutMillis, buffer.capacity())})",
                 )
             }
-            val completed = try {
-                connection.requestWait(timeoutMillis)
-            } catch (_: TimeoutException) {
-                drainCancelledRead(request)
-                return@synchronized null
+            val waitResult = UsbTransferCompatibility.awaitUsbRequest(
+                connection = connection,
+                request = request,
+                timeoutMillis = timeoutMillis,
+                buffer = buffer,
+                isClosed = { synchronized(stateLock) { closed } },
+            )
+            val completed = when (waitResult) {
+                is UsbRequestWaitResult.Completed -> waitResult.value
+                is UsbRequestWaitResult.TimedOut -> {
+                    if (!waitResult.requestDrained) drainCancelledRead(request)
+                    return@synchronized null
+                }
+                UsbRequestWaitResult.Closed -> throw IphoneUsbException.DeviceUnavailable("USBMUX session is closed")
             }
             if (completed == null) {
                 throw failSession("Android returned no USBMUX read request")
@@ -402,14 +426,23 @@ class Iap2UsbSession internal constructor(
         }
     }
 
-    override fun close() {
+    override fun close() = closeWithRelease {}
+
+    internal fun closeWithRelease(release: () -> Unit) {
         val requestToCancel = synchronized(stateLock) {
             if (closed) return
             closed = true
             pendingRead
         }
-        requestToCancel?.cancel()
-        connection.close()
+        try {
+            requestToCancel?.cancel()
+        } finally {
+            try {
+                release()
+            } finally {
+                connection.close()
+            }
+        }
     }
 
     private fun checkOpen() {
@@ -425,12 +458,14 @@ class Iap2UsbSession internal constructor(
         if (!request.cancel()) {
             throw failSession("Android could not cancel timed out USBMUX read request")
         }
-        val completed = try {
-            connection.requestWait(CANCEL_DRAIN_TIMEOUT_MILLIS)
-        } catch (_: TimeoutException) {
-            throw failSession("Timed out draining cancelled USBMUX read request")
-        }
-        if (completed !== request) {
+        val result = UsbTransferCompatibility.awaitUsbRequest(
+            connection = connection,
+            request = request,
+            timeoutMillis = CANCEL_DRAIN_TIMEOUT_MILLIS,
+            buffer = ByteBuffer.allocateDirect(1),
+            isClosed = { synchronized(stateLock) { closed } },
+        )
+        if (result !is UsbRequestWaitResult.Completed || result.value !== request) {
             throw failSession("Android did not drain the cancelled USBMUX read request")
         }
     }

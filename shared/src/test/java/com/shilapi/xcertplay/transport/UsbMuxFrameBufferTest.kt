@@ -165,6 +165,28 @@ class UsbMuxFrameBufferTest {
         assertEquals(0, buffer.bufferedBytes)
     }
 
+    @Test fun usbTransferSizedFragmentsPreserveMuxFramesAtSizeBoundaries() {
+        val frameLengths = listOf(17, 16_383, 16_384, 16_385, 32_768, 65_535, 65_536)
+        for (frameLength in frameLengths) {
+            val wire = mux(73, ByteArray(frameLength - 16) { (it % 239).toByte() })
+            val buffer = UsbMuxFrameBuffer()
+            var offset = 0
+            while (offset < wire.size) {
+                val end = minOf(
+                    offset + UsbTransferCompatibility.LEGACY_MAX_TRANSFER_BYTES,
+                    wire.size,
+                )
+                buffer.append(wire.copyOfRange(offset, end))
+                offset = end
+            }
+            val frame = buffer.takeFrame()
+            assertEquals("frame length $frameLength", frameLength, frame!!.length)
+            assertEquals(frameLength - 16, frame.payload.size)
+            assertNull(buffer.takeFrame())
+            assertEquals(0, buffer.bufferedBytes)
+        }
+    }
+
     @Test fun paddingDiagnosticsAreCappedAndContainOnlyFramingMetadata() {
         val reports = mutableListOf<String>()
         val buffer = UsbMuxFrameBuffer(reports::add)
