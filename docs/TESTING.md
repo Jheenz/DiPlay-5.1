@@ -1,5 +1,165 @@
 # Test checklist
 
+## Phase 3D.2T.1 - Lockdown TLS peer validation + StopSession (3D.2U manual)
+
+See [TLS validation and cleanup](PHASE3D2T1_TLS_VALIDATION_CLEANUP.md). The trust-all
+manager was replaced by paired-device key pinning. A real in-JVM TLS server tests:
+- accept, mismatch, empty/malformed chains and missing material;
+- same-stream fragmented/coalesced boundaries and RST/EOF;
+- the encrypted QueryType, and StopSession(SessionID) inside TLS;
+- cleanup on every outcome.
+
+Lint shows no NewApi findings in the TLS path. No hardware was run. On E01, press "Test Lockdown
+TLS round trip (NO SERVICES)" only manually with an already-transitioned config5 iPhone,
+save the report, and STOP.
+
+## Phase 3D.2T - Lockdown TLS and session static audit
+
+See [same-stream trace, certificate-validation blocker and lifecycle audit](PHASE3D2T_LOCKDOWN_TLS_SESSION_AUDIT.md).
+Five local-only TLS boundary tests pass on Robolectric28. This is not API22
+provider certification. The current Lockdown TrustManager accepts empty or
+untrusted peer certificate chains, so do not attempt TLS on E01 until a
+paired-device validation policy is resolved. No USB/hardware or TLS
+operation was run. StopSession must be inside TLS after a successful SSL
+session; a transport close does not confirm logical session cleanup.
+
+## Phase 3D.2S - controlled modern StartSession (no TLS/services)
+
+See [implementation, request/cleanup boundaries and verification](PHASE3D2S_CONTROLLED_STARTSESSION_DIAGNOSTIC.md).
+47 focused PC tests passed; assembleDebug succeeded. Version
+`0.2.12-api22-phase3d2s-startsession`, minSdk22, CONNECTIONS_ENABLED=false.
+The separate manually confirmed action requires one accepted record and
+proven active config5, exact live association and one fresh Lockdown connection.
+No Pair/ValidatePair/SetValue, identity generation, record writes, TLS/services
+or projection. SSL=false plus valid SessionID allows one StopSession;
+SSL=true closes without TLS/plaintext StopSession and reports session stop
+not confirmed. Preserve installation/data/KeyStore; in-place update only.
+No hardware test was run. Earlier instructions below are historical phase
+boundaries, not instructions to repeat Pair or ValidatePair in Phase S.
+
+## Phase 3D.2P.3 - existing-record lookup/reopen verification
+
+See [lookup comparison, clarified chronology and disk reopen tests](PHASE3D2P3_EXISTING_PAIR_LOOKUP_FIX.md).
+The user confirmed the old NOT_FOUND preceded the latest Pair and followed
+uninstall; no same-state false lookup is proven. No production fix, version
+change or new APK. 42 focused tests passed (common32/shared10), including a
+fresh preferences implementation loading the committed XML file.
+That PC independent store reopen is not an E01 process/KeyStore restart.
+No USB validation test is authorized; peer RST remains unresolved.
+
+## Phase 3D.2P.2 - local pair-record inspection
+
+See [audit and validation](PHASE3D2P2_PAIR_RESET_PERSISTENCE_AUDIT.md).
+Use only **Inspect local pairing records (NO USB)** for the next observation;
+do not repeat Pair or run a validation/reconnect hardware test.
+Preserve installation/data/KeyStore and install same-signer in-place updates.
+Tests mock the previous Pair/Validate reset; they never contact hardware.
+
+## Phase 3D.2P.1 - no-Pair existing-record ValidatePair
+
+See [the separate action and failure classifications](PHASE3D2P1_EXISTING_PAIR_VALIDATE_TEST.md).
+Build version `0.2.12-api22-phase3d2p1-existing-pair`, minSdk22,
+CONNECTIONS_ENABLED=false. PC-only focused validation: 201 tests passed
+(shared58/common143), no failed/skipped; assembleDebug successful.
+Tests use injected inventories/storage and mocked USB frames, not real USB.
+Missing/PREPARED records block before open, associated PAIRED/VALIDATED
+records send at most one ValidatePair, never Pair/SetValue/session/services.
+RST, FIN/EOF, timeout, short-write, wrong-device and cleanup outcomes retain
+safe original provenance. Do not run the hardware diagnostic during development.
+
+## Phase 3D.2O — controlled Lockdown Pair + ValidatePair
+
+See [the manual confirmation, candidate handling, protocol order and STOP
+criteria](PHASE3D2O_CONTROLLED_PAIR_VALIDATE_TEST.md). Debug suffix:
+`-api22-phase3d2o-pair-validate`. The action is separate from read-only
+discovery and never starts automatically. Confirm only after reviewing the
+disclosure that `SetValue(UntrustedHostBUID)`, local protected credential
+storage and iPhone Trust are persistent effects. Trust approval happens only
+on the iPhone.
+
+For a new device record, the order is QueryType, GetValue(UniqueDeviceID) for
+per-device lookup (never logged/exported), preserve stable identity, then
+SetValue(UntrustedHostBUID), GetValue(DevicePublicKey), and
+GetValue(WiFiAddress). Because the normal generator's empty issuer is rejected
+by the bundled Bouncy Castle parser, the explicitly authorized diagnostic-only
+generator uses valid nonempty names while retaining RSA-2048, SHA-256, chain
+structure and lifetime; the normal generator is unchanged. The bundled parser
+checks the signed chain and device-key/private-key match before Pair. This is
+not an iOS acceptance claim. Save the complete candidate including EscrowBag
+in AES-GCM, with its random AES key
+RSA-wrapped by AndroidKeyStore; synchronously commit and decrypt/readback
+verify before Pair. A PREPARED candidate gets one Pair per manual run; pending
+ends that run after cleanup, and the next separately confirmed run reuses the
+same material. PAIRED (Pair accepted, validation failed/cancelled) and
+VALIDATED records each get ValidatePair only, with no SetValue or Pair.
+Existing legacy `lockdown_host_id`, corrupt data or a lost keystore key is
+STOP; never import, read legacy credentials, clear, replace or downgrade.
+A repeated VALIDATED save of an unchanged record must leave its ciphertext unchanged.
+Any ambiguous result or cleanup failure is STOP. No automatic retry,
+StartSession, TLS, StartService or projection.
+
+The focused UI tests cover manual confirmation/disclosure, exclusion in both
+directions and retention in both report-export branches. Run them together with
+the core diagnostic/store tests:
+
+```powershell
+.\gradlew.bat :shared:testDebugUnitTest --tests '*ControlledLockdownPairingTest*' --tests '*DiagnosticPairMaterialTest*' --tests '*ReadOnlyUsbMuxInitTest*' --tests '*ReadOnlyLockdownQueriesTest*' --tests '*UsbMuxVersionPacketTest*' :common:testDebugUnitTest --tests '*ControlledPairDiagnosticTest*' --tests '*AndroidDiagnosticPairStoreTest*' --tests '*AndroidControlledPairAccessTest*' --tests '*AndroidReadOnlyLockdownAccessTest*' --tests '*ReadOnlyLockdownDiagnosticTest*' --tests '*ReadOnlyLockdownUiTest*' --tests '*DiagnosticExportUiTest*' --tests '*Lazy*' --tests '*UsbMuxVersion*' --tests '*ActiveConfig5*' --tests '*Phase3BDeviceSettingsTest*'
+.\gradlew.bat :mobile:assembleDebug
+```
+Final combined focused run: PASS, 151 tests (shared 16, common 135), 0 failed,
+0 skipped. It covers pairing, certificate material, store, adapter,
+orchestrator, UI, export, Settings and lazy-startup tests plus read-only
+Lockdown, K and configuration-5 regressions. `:mobile:assembleDebug` was run
+once afterwards: BUILD SUCCESSFUL (10 s).
+APK `0.2.12-api22-phase3d2o-pair-validate` (code 31, minSdk 22), SHA-256
+`5C16FB8C56D023D2799E25F88832F75F33C12A0F699A1B58CA53736C73EC3D0A`. No
+hardware was exercised; SDK 28 Robolectric with software keys does not certify
+E01 AndroidKeyStore or iOS certificate acceptance.
+
+## USBMUX init + read-only Lockdown discovery
+
+See [the brief manual procedure and boundaries](READ_ONLY_LOCKDOWN_DISCOVERY_TEST.md).
+Suffix `-api22-readonly-lockdown`; separate confirmation beside K, ProductType
+only after QueryType, no automatic prior phases, pairing or session. Save the
+report and STOP after this diagnostic. The user-reported K hardware PASS is
+historical version-exchange evidence, not a PASS for this new action. Earlier
+K build/test statements below describe their own snapshot.
+Final focused validation passed **157 tests (common116/shared41), failures/errors0**,
+including injected observer, all-USB exclusion, export and pause/destroy checks.
+Robolectric uses API28, not API22 hardware. One final `:mobile:assembleDebug`
+succeeded (16s), minSdk22/code31/version `0.2.12-api22-readonly-lockdown`,
+v1/v2 signing verified and connection gate false. APK: 8,382,451 bytes,
+SHA-256 `29D9106E9FD4DB966944D8D4021096BFC5A6E433312A10BBC072B58651DCF5D3`.
+No hardware operations were performed. Read-only requests do not guarantee no
+iOS prompt: leave Trust untouched, pause to cancel, save and STOP. Init confirms
+accepted version/submitted setup only (no setup ACK); TCP readiness and
+QueryType/ProductType discovery are separate milestones. See the procedure for
+the selector breakdown.
+
+## Phase 3D.2K — manual USBMUX version exchange only
+
+See [the exact boundary, focused PC command and parked-car procedure](PHASE3D2K_USBMUX_VERSION_TEST.md).
+Build suffix: `-api22-phase3d2k-usbmux-version`. Manually confirm
+**Test USBMUX version exchange** / **Send ONE version exchange** only on the
+currently connected iPhone already in active5 (prepared by earlier separately
+authorized E/G) with permission already granted; prior PASS reports are
+historical, not proof of current state. Do not replug or re-run E/G/I to create
+it; otherwise STOP. No automatic E/G/I. Any K preflight/readback failure is
+final: STOP, no retry or workaround.
+One same-handle GET5, forcefalse claim, OUT20/IN1024 (1000ms each, reply count20),
+release/finally-close; no fragment continuation, padding discard or retry.
+PASS stops at **USBMUX VERSION EXCHANGE CONFIRMED** and
+**SETUP07 / LOCKDOWN / PAIRING NOT STARTED**. Leave Trust untouched, save the
+report and STOP. Injected UI tests cover manual confirmation, bidirectional USB
+exclusion, transient-detach suppression, pause cleanup and export.
+Final combined validation passed 104 tests with zero failures/errors (70 common
+including K UI9, 34 shared including the byte-identical shared
+`UsbMuxVersionPacket.request()` extraction) and `:mobile:assembleDebug`;
+minSdk22, versionCode31, apksigner v1/v2 and `CONNECTIONS_ENABLED=false` were
+verified. Final APK (9,856,963 bytes) SHA-256
+`268F1EE844490A5F78877512705C305090437ADC6BD90F79B572B0878606FD54`.
+Real-E01 K has not been run; no hardware PASS is claimed.
+
 Use the [installation guide](INSTALL.md). With the car parked, verify wired and wireless connection, picture, touch and music. Test disconnect/reconnect, then settings Apply/Cancel. Save a diagnostic report after reproducing an issue.
 
 ## Phase 3A API 22 existing-LAN checks

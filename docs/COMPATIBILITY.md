@@ -1,5 +1,143 @@
 # Compatibility
 
+## Phase 3D.2T.1 - Lockdown TLS peer validation (API22)
+
+The Lockdown TLS client now pins the peer leaf SubjectPublicKeyInfo to the stored paired
+DeviceCertificate key. It rejects empty, malformed or mismatched chains, and has no trust-all
+and no hostname/date/Web-PKI substitutes. The client identity reuses the stored
+RootCertificate/RootPrivateKey.
+
+All APIs are API1-era (SSLContext "TLS", SSLEngine, KeyStore, KeyManagerFactory PKIX,
+CertificateFactory). `endpointIdentificationAlgorithm` is guarded at API24+. There is no
+SNI/ALPN/java.util.Base64/java.time. Only TLSv1.2/1.3 are allowed, with no downgrade.
+Hardware has not yet proven that the iPhone presents its paired key. A mismatch fails
+closed. See [PHASE3D2T1_TLS_VALIDATION_CLEANUP.md](PHASE3D2T1_TLS_VALIDATION_CLEANUP.md).
+
+## Phase 3D.2T - Lockdown TLS/session static audit
+
+Real Phase3D.2S proved modern StartSession with SSL=true, but did not attempt
+TLS or StopSession. Static trace confirms the existing TLS wrapper upgrades
+the same USBMUX TCP stream and uses the paired root certificate/private key.
+However, its custom TrustManager accepts every/empty peer certificate chain;
+the stored DeviceCertificate is not checked against the live TLS peer. This
+violates the no-trust-all requirement. Do not run a TLS hardware test until
+paired-device peer validation and API22 provider behavior are resolved.
+Five local TLS boundary tests pass under Robolectric28; that is not API22
+runtime certification. StopSession must be sent over TLS after successful
+TLS and needs the StartSession SessionID; closure alone is not confirmed
+cleanup. See [full audit and next-test gate](PHASE3D2T_LOCKDOWN_TLS_SESSION_AUDIT.md).
+
+## Phase 3D.2S - isolated modern StartSession diagnostic
+
+Debug version `0.2.12-api22-phase3d2s-startsession` retains minSdk22,
+CONNECTIONS_ENABLED=false, package and signer. Separate manual confirmation
+uses protected accepted records and the proven config5 transport, never
+the normal TLS/service wrapper. StartSession is state-changing, at most once.
+No Pair/ValidatePair/identity generation/persistence writes/TLS/StartService
+or projection. Conditional plaintext StopSession only for explicit SSL=false
+and valid SessionID; SSL=true closes and leaves session stop unconfirmed.
+47 focused tests passed; assembleDebug and APK v1/v2 verification succeeded.
+See [scope, cleanup limitations and APK](PHASE3D2S_CONTROLLED_STARTSESSION_DIAGNOSTIC.md).
+
+## Phase 3D.2P.2 - local pair-record inspection
+
+Debug suffix `-api22-phase3d2p2-local-records` adds only a separate manual,
+read-only local metadata action. No USB/network/Lockdown, identity generation
+or writes. It retains minSdk22, the debug package/signing configuration and
+CONNECTIONS_ENABLED=false. Existing Pair/ValidatePair transport is unchanged.
+See [the reset audit and local-only next step](PHASE3D2P2_PAIR_RESET_PERSISTENCE_AUDIT.md).
+
+## Phase 3D.2P.1 - existing-record validation, no Pair
+
+Version `0.2.12-api22-phase3d2p1-existing-pair` adds a separately confirmed
+existing-record ValidatePair action. Verified PAIRED/VALIDATED material is
+required before USB open, then device association is checked through
+QueryType/GetValue(UniqueDeviceID). Missing/PREPARED/invalid records never
+fall back to Pair. Original transport causes and safe state snapshots are
+retained. No session/TLS/service/projection or storage security downgrade.
+minSdk22 and CONNECTIONS_ENABLED=false remain unchanged.
+See [scope, limitations and validation](PHASE3D2P1_EXISTING_PAIR_VALIDATE_TEST.md).
+PC tests: 201 passed; assembleDebug successful. No E01 test was run.
+
+## Phase 3D.2O — controlled Lockdown Pair + ValidatePair
+
+Debug suffix `-api22-phase3d2o-pair-validate` adds a separate, manually
+confirmed Pair/ValidatePair diagnostic. It retains minSdk22 and the disabled
+normal-connection gate. `UniqueDeviceID` associates a device with its own
+record but is never logged/exported. The complete record, including EscrowBag,
+is AES-GCM encrypted with a per-record random AES key wrapped by an
+AndroidKeyStore RSA key generated with `KeyPairGeneratorSpec` (API 18+).
+SystemBUID remains stable globally. Commit is synchronous and followed by
+decrypt/readback verification; records are never replaced or downgraded, and an unchanged VALIDATED record is
+not rewritten.
+Existing legacy `lockdown_host_id` causes a safe refusal, not migration,
+credential reading or clearing. Corrupt data or a lost keystore key stops.
+
+PREPARED candidates are paired only by explicit confirmation, one Pair request
+per run. After pending, the next manually confirmed run reuses the same
+candidate/material. PAIRED (accepted Pair but failed/cancelled validation) and
+VALIDATED records are validation-only: one ValidatePair, no SetValue or Pair.
+The audited normal generator's empty issuer is rejected by bundled Bouncy
+Castle. With explicit user authorization, a separate diagnostic-only
+certificate generator uses valid nonempty names while retaining RSA-2048,
+SHA-256, chain structure and lifetime; the normal generator remains unchanged.
+Bouncy Castle parses and checks the signed chain and device-key/private-key
+match before Pair, without global provider registration or TLS. This deviation
+does not establish iOS certificate acceptance. Detach, pause, validation
+failure or cleanup failure stops the run. No automatic retry, Trust approval,
+StartSession, TLS, StartService or projection. Trust is approved only by the
+user on the iPhone. See the
+[controlled Pair/ValidatePair procedure](PHASE3D2O_CONTROLLED_PAIR_VALIDATE_TEST.md).
+PC validation passed 151 focused tests (shared 16, common 135) and
+`:mobile:assembleDebug` built `0.2.12-api22-phase3d2o-pair-validate`
+(code 31, minSdk 22, `CONNECTIONS_ENABLED=false`). The API 22 code surface is
+compatible, but SDK 28 Robolectric with software keys does not certify E01
+AndroidKeyStore behavior or iOS acceptance; no hardware was exercised.
+
+## Read-only Lockdown discovery (manual diagnostic only)
+
+`0.2.12-api22-readonly-lockdown` adds separately confirmed USBMUX initialization,
+Lockdown QueryType and GetValue(ProductType). See the
+[procedure, J/K/L references and strict boundaries](READ_ONLY_LOCKDOWN_DISCOVERY_TEST.md).
+API22 and the false normal-connection gate are preserved; no pairing, Trust
+approval, session/service startup, NCM or projection is enabled. The reported K
+hardware PASS remains version-exchange-only evidence. No hardware Lockdown PASS
+or CarPlay compatibility is inferred; older K validation below is historical.
+Final focused PC tests passed **157 (common116/shared41), zero failures/errors**.
+Injected UI coverage verifies observer failure handling, USB mutual exclusion,
+export and lifecycle cancellation; API28 Robolectric is not an API22 hardware
+result. One final debug assemble succeeded (16s); APK minSdk22/code31/version
+`0.2.12-api22-readonly-lockdown`, package `com.shihab.diplay.legacytest`,
+v1/v2 signatures verified, gate false, no editor errors, 8,382,451 bytes,
+SHA-256 `29D9106E9FD4DB966944D8D4021096BFC5A6E433312A10BBC072B58651DCF5D3`.
+No hardware operations were performed. Init means accepted version/submitted
+setup, not dedicated setup ACK; TCP readiness and read-only discovery are
+distinct milestones. Read-only requests do not guarantee no iOS prompt:
+leave Trust untouched, pause to cancel, save and STOP.
+
+## Phase 3D.2K — isolated USBMUX version diagnostic
+
+Version `0.2.12-api22-phase3d2k-usbmux-version` adds the separately confirmed
+[one-version-exchange experiment](PHASE3D2K_USBMUX_VERSION_TEST.md), following
+the user-reported I claim/release PASS and J static audit below. This is not
+full USBMUX initialization or CarPlay compatibility evidence. PC validation
+passed 104 tests and the debug build (minSdk22, signed, connections disabled;
+final APK SHA-256 `268F1EE844490A5F78877512705C305090437ADC6BD90F79B572B0878606FD54`);
+real-E01 K hardware validation has not been executed. Shared version-request bytes
+were extracted byte-identically; the existing host is behaviorally unchanged and
+K does not open it. Requires the currently connected iPhone already in active5
+(prepared by earlier separately authorized E/G) with existing permission;
+prior PASS reports are historical, not proof of current state. Do not replug
+or re-prepare; otherwise STOP. Any K preflight/readback failure is final, with
+no retry or workaround. No automatic
+E/G/I or normal connection startup. Same-handle GET5, one forcefalse claim,
+one OUT20 and one IN1024 (1000ms each, count20 required), release/finally-close.
+No drain, retry, continuation, padding discard, SETUP07, Lockdown, pairing,
+MFi/NCM activation or projection. Leave Trust untouched; export and STOP.
+Active USB diagnostics mutually exclude K in both directions; pause cancels
+subsequent work while retaining cleanup. Historical I/J statements below
+describe their own phase boundaries, not this subsequent K implementation.
+
 This public preview is an independent receiver, not an Apple-certified CarPlay accessory. The experimental bundled accessory identity is extractable and its future acceptance is not guaranteed.
 
 | Area | Current scope |
@@ -2332,6 +2470,17 @@ It requires existing permission, five configurations, scoped config5
 Valeria/USBMUX/NCM evidence and same-connection GET_CONFIGURATION5.
 Only config5 interface1/alt0 is claimed once with forcefalse, released once
 if claimtrue and closed in finally. No setter/vendor/alternate/driver detach
-or bulk/USBMUX/Lockdown/projection follows. Hardware result remains pending.
+or bulk/USBMUX/Lockdown/projection follows. The user subsequently reports real
+E01 PASS: same-connection active5, force=false claim=true, release=true, cleanup
+success and zero bulk/interrupt transfers. USBMUX protocol remains untested.
 47 focused tests and the debug build passed; built minSdk22/signing verified,
 normal connections remain disabled. Leave the iPhone Trust prompt untouched.
+
+### Phase 3D.2J: first USBMUX exchange static audit
+
+The [first-exchange audit](PHASE3D2J_FIRST_USBMUX_EXCHANGE_AUDIT.md) identifies
+the exact 20-byte version request/reply contract and a separable stopping point
+before setup07. QDrive's bounded-per-read but unbounded-total IN drain is not
+shown necessary for E01. A proposed one-OUT/one-IN K rejects short/extra/
+unexpected data without retry, setup, TCP or Lockdown. No K implementation,
+runtime change, native execution or USB operation occurred in this audit.

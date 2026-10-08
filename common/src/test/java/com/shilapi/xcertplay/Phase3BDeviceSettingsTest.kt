@@ -43,6 +43,34 @@ class Phase3BDeviceSettingsTest {
         assertTrue(buttons.contains("Check QDrive transition preflight (read-only)"))
         assertTrue(buttons.contains("Select post-Valeria configuration"))
         assertTrue(buttons.contains("Claim/release configuration-5 USBMUX"))
+        assertTrue(buttons.contains("Test USBMUX version exchange"))
+        assertTrue(buttons.contains("Test read-only Lockdown discovery"))
+        assertTrue(buttons.contains("Test StartSession (NO TLS / NO SERVICES)"))
+        assertTrue(views.filterIsInstance<TextView>().any {
+            it.text.toString() == ModernStartSessionDiagnostic.TITLE
+        })
+        assertTrue(views.filterIsInstance<TextView>().any {
+            it.text.toString() == ModernStartSessionDiagnostic.SAFETY
+        })
+        assertNull(DiPlayActivity::class.java.getDeclaredField("modernStartSessionDiagnostic")
+            .apply { isAccessible = true }.get(activity))
+        assertTrue(views.filterIsInstance<TextView>().any {
+            it.text.toString() == "USBMUX init + read-only Lockdown discovery"
+        })
+        assertNull(DiPlayActivity::class.java.getDeclaredField("readOnlyLockdownDiagnostic")
+            .apply { isAccessible = true }.get(activity))
+        assertFalse(DiPlayActivity::class.java.getDeclaredField("readOnlyLockdownRunning")
+            .apply { isAccessible = true }.getBoolean(activity))
+        assertTrue(views.filterIsInstance<TextView>().any {
+            it.text.toString() == "Phase 3D.2K — USBMUX version exchange"
+        })
+        assertTrue(views.filterIsInstance<TextView>().any {
+            it.text.toString() == "ONE USBMUX VERSION REQUEST/REPLY ONLY — NO LOCKDOWN"
+        })
+        assertNull(DiPlayActivity::class.java.getDeclaredField("usbMuxVersionDiagnostic")
+            .apply { isAccessible = true }.get(activity))
+        assertFalse(DiPlayActivity::class.java.getDeclaredField("usbMuxVersionRunning")
+            .apply { isAccessible = true }.getBoolean(activity))
         assertNull(DiPlayActivity::class.java.getDeclaredField("activeConfig5ClaimDiagnostic")
             .apply { isAccessible = true }.get(activity))
         assertFalse(DiPlayActivity::class.java.getDeclaredField("activeConfig5ClaimRunning")

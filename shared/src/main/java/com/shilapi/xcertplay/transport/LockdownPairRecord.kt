@@ -125,6 +125,22 @@ object LockdownPairRecordGenerator {
         wifiAddress: String,
         hostId: String,
         systemBuid: String,
+    ): LockdownPairRecord = generateRecord(devicePublicKeyPkcs1Pem, wifiAddress, hostId, systemBuid, false)
+
+    /** Diagnostic-only valid names; the legacy generator's wire profile remains unchanged. */
+    fun generateDiagnostic(
+        devicePublicKeyPkcs1Pem: ByteArray,
+        wifiAddress: String,
+        hostId: String,
+        systemBuid: String,
+    ): LockdownPairRecord = generateRecord(devicePublicKeyPkcs1Pem, wifiAddress, hostId, systemBuid, true)
+
+    private fun generateRecord(
+        devicePublicKeyPkcs1Pem: ByteArray,
+        wifiAddress: String,
+        hostId: String,
+        systemBuid: String,
+        diagnosticNames: Boolean,
     ): LockdownPairRecord {
         require(devicePublicKeyPkcs1Pem.isNotEmpty()) { "devicePublicKeyPkcs1Pem must not be empty" }
         require(wifiAddress.isNotBlank()) { "wifiAddress must not be blank" }
@@ -132,7 +148,7 @@ object LockdownPairRecordGenerator {
         require(systemBuid.isNotBlank()) { "systemBuid must not be blank" }
 
         val copiedDeviceKey = devicePublicKeyPkcs1Pem.copyOf()
-        val material = CertificateMaterialGenerator.generate(copiedDeviceKey)
+        val material = CertificateMaterialGenerator.generate(copiedDeviceKey, diagnosticNames)
         return LockdownPairRecord.create(
             hostId = hostId,
             systemBuid = systemBuid,
@@ -172,7 +188,7 @@ private object CertificateMaterialGenerator {
     private val sha256WithRsa = algorithmIdentifier("1.2.840.113549.1.1.11")
     private val rsaEncryption = algorithmIdentifier("1.2.840.113549.1.1.1")
 
-    fun generate(devicePublicKeyPem: ByteArray): CertificateMaterial {
+    fun generate(devicePublicKeyPem: ByteArray, diagnosticNames: Boolean): CertificateMaterial {
         val devicePublicKey = parsePkcs1RsaPublicKey(devicePublicKeyPem)
         val rootKeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(RSA_KEY_BITS) }.generateKeyPair()
         val hostKeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(RSA_KEY_BITS) }.generateKeyPair()
@@ -181,10 +197,12 @@ private object CertificateMaterialGenerator {
         val hostPublicKey = hostKeyPair.public as? RSAPublicKey
             ?: throw GeneralSecurityException("Generated host key is not RSA")
         val now = System.currentTimeMillis()
-        val emptyName = distinguishedName(null)
+        val rootName = distinguishedName(if (diagnosticNames) "DiPlay Controlled Pair Root" else null)
+        val hostName = distinguishedName(if (diagnosticNames) "DiPlay Controlled Pair Host" else null)
+        val deviceName = distinguishedName(if (diagnosticNames) "DiPlay Controlled Pair Device" else null)
         val rootDer = certificate(
-            issuer = emptyName,
-            subject = emptyName,
+            issuer = rootName,
+            subject = rootName,
             certificatePublicKey = rootPublicKey,
             signingKey = rootKeyPair.private,
             signingPublicKey = rootPublicKey,
@@ -192,8 +210,8 @@ private object CertificateMaterialGenerator {
             extensions = rootExtensions(),
         )
         val hostDer = certificate(
-            issuer = emptyName,
-            subject = emptyName,
+            issuer = rootName,
+            subject = hostName,
             certificatePublicKey = hostPublicKey,
             signingKey = rootKeyPair.private,
             signingPublicKey = rootPublicKey,
@@ -201,8 +219,8 @@ private object CertificateMaterialGenerator {
             extensions = leafExtensions(hostPublicKey, includeSubjectKeyIdentifier = false),
         )
         val deviceDer = certificate(
-            issuer = emptyName,
-            subject = emptyName,
+            issuer = rootName,
+            subject = deviceName,
             certificatePublicKey = devicePublicKey,
             signingKey = rootKeyPair.private,
             signingPublicKey = rootPublicKey,

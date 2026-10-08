@@ -404,10 +404,12 @@ class TlsDuplexChannel private constructor(
             underlying: BlockingDuplexByteStream,
             pairRecord: LockdownPairRecord,
             handshakeTimeoutMillis: Long = 5_000,
+            peerReport: (LockdownPeerValidation) -> Unit = {},
         ): TlsDuplexChannel {
             require(handshakeTimeoutMillis > 0) { "handshakeTimeoutMillis must be positive" }
+            val validator = LockdownPeerCertificateValidator.from(pairRecord)
             try {
-                val engine = LockdownTlsEngineFactory.create(pairRecord)
+                val engine = LockdownTlsEngineFactory.create(pairRecord, validator)
                 val supported = engine.supportedProtocols.toSet()
                 val enabled = ALLOWED_PROTOCOLS.filter(supported::contains).toTypedArray()
                 if (enabled.isEmpty()) {
@@ -416,6 +418,8 @@ class TlsDuplexChannel private constructor(
                 engine.enabledProtocols = enabled
                 return TlsDuplexChannel(underlying, engine).also {
                     it.performHandshake(handshakeTimeoutMillis)
+                    // Defense in depth: never hand out an unauthenticated or anonymous session.
+                    validator.requireValidSession(engine.session)
                 }
             } catch (error: Exception) {
                 try {
@@ -424,6 +428,8 @@ class TlsDuplexChannel private constructor(
                     // Preserve the handshake failure.
                 }
                 throw error
+            } finally {
+                try { peerReport(validator.lastValidation) } catch (_: Exception) { }
             }
         }
 

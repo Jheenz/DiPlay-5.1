@@ -9,6 +9,13 @@ class AndroidActiveConfig5UsbMuxClaimAccess(private val manager: UsbManager) : A
         includeFlattenedInterfaces = false).snapshot()
 
     override fun open(device: PassiveUsbDevice): ActiveConfig5UsbMuxClaimConnection {
+        return openScoped(device) { connection, target, unchanged -> Session(connection, target, unchanged) }
+    }
+
+    internal fun <T> openScoped(
+        device: PassiveUsbDevice,
+        create: (UsbDeviceConnection, UsbInterface, () -> Unit) -> T,
+    ): T {
         ActiveConfig5UsbMuxClaimSelection.unchanged(device, devices())
         val current = manager.deviceList[device.name]
             ?: throw UsbMuxClaimFailure(UsbMuxClaimFailureReason.DEVICE_DISAPPEARED, "Device disappeared before open")
@@ -30,7 +37,12 @@ class AndroidActiveConfig5UsbMuxClaimAccess(private val manager: UsbManager) : A
             throw UsbMuxClaimFailure(UsbMuxClaimFailureReason.PERMISSION_UNAVAILABLE,
                 "Open permission denied: ${error.message}")
         } ?: throw UsbMuxClaimFailure(UsbMuxClaimFailureReason.DEVICE_OPEN_FAILURE, "openDevice returned null")
-        return Session(connection, target) { ActiveConfig5UsbMuxClaimSelection.unchanged(device, devices()) }
+        try {
+            return create(connection, target) { ActiveConfig5UsbMuxClaimSelection.unchanged(device, devices()) }
+        } catch (error: Throwable) {
+            try { connection.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
+            throw error
+        }
     }
 
     private class Session(

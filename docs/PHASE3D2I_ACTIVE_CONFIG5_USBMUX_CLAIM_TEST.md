@@ -214,4 +214,14 @@ No dependencies were installed. No hardware operations were executed.
 10. Use **Save diagnostic report**. STOP; do not press any transport diagnostic,
     change configuration, approve Trust or implement/run the next protocol phase.
 
-STOP AFTER PHASE 3D.2I IMPLEMENTATION/BUILD — HARDWARE CLAIM RESULT PENDING.
+## Subsequent real-E01 result (user reported)
+
+The user reports **ACTIVE CONFIGURATION 5 USBMUX INTERFACE CLAIM CONFIRMED**:
+direct 05AC:12A8, five configurations, active 5, exact config5 USBMUX ID1/alt0/
+255.254.2 with OUT04/IN85, same-connection GET_CONFIGURATION=5, force=false,
+claim=true, release=true, cleanup success and zero bulk/interrupt transfers.
+This confirms ownership/cleanup, **not USBMUX protocol success**.
+The [Phase3D.2J static first-exchange audit](PHASE3D2J_FIRST_USBMUX_EXCHANGE_AUDIT.md)
+designs a version-only next experiment without implementing or running it.
+
+STOP AFTER PHASE 3D.2I — NO SUBSEQUENT PROTOCOL OPERATION AUTHORIZED BY THIS GUIDE.

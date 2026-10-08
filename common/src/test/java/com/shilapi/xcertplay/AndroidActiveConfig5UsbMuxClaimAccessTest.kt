@@ -17,7 +17,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], manifest = Config.NONE)
 class AndroidActiveConfig5UsbMuxClaimAccessTest {
-    private class Fixture {
+    internal class Fixture {
         val manager = mock(UsbManager::class.java)
         val device = mock(UsbDevice::class.java)
         val connection = mock(UsbDeviceConnection::class.java)

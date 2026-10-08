@@ -24,6 +24,40 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en", shadows = [FileProviderPathTestShadow::class])
 class DiagnosticExportUiTest {
+    @Test fun selectedDocumentDestinationIncludesSavedReadOnlyLockdownReport() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        val report = "${ReadOnlyLockdownDiagnostic.TITLE}\nOutcome=STOP\nProductType=not queried"
+        val pairReport = "${ControlledPairDiagnostic.TITLE}\nOutcome=STOP\nFailure stage=PREFLIGHT"
+        val existingReport = "${ExistingPairValidationDiagnostic.TITLE}\nOutcome=STOP\nPair count = 0"
+        val localReport = "${LocalPairMetadataDiagnostic.TITLE}\nRecord entries=0"
+        val sessionReport = "${ModernStartSessionDiagnostic.TITLE}\nSTARTSESSION CONFIRMED — TLS REQUIRED"
+        ReflectionHelpers.setField(activity, "readOnlyLockdownReport", report)
+        ReflectionHelpers.setField(activity, "controlledPairReport", pairReport)
+        ReflectionHelpers.setField(activity, "existingPairReport", existingReport)
+        ReflectionHelpers.setField(activity, "localPairMetadataReport", localReport)
+        ReflectionHelpers.setField(activity, "modernStartSessionReport", sessionReport)
+        val file = File(activity.filesDir, "readonly-lockdown-export-test.txt")
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "exportDiagnostics",
+                ReflectionHelpers.ClassParameter.from(android.net.Uri::class.java, android.net.Uri.fromFile(file)))
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while ((!file.exists() || !file.readText().contains(report) || !file.readText().contains(pairReport)) &&
+                System.nanoTime() < deadline) {
+                Thread.sleep(20)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            assertTrue("Selected document must retain STOP report", file.readText().contains(report))
+            assertTrue("Selected document must retain controlled-pair STOP report", file.readText().contains(pairReport))
+            assertTrue("Selected document must retain no-Pair report", file.readText().contains(existingReport))
+            assertTrue("Selected document must retain local metadata", file.readText().contains(localReport))
+            assertTrue("Selected document must retain StartSession report", file.readText().contains(sessionReport))
+        } finally {
+            controller.pause().stop().destroy()
+            file.delete()
+        }
+    }
+
     @Test fun missingPickerSavesAReportAndProvidesSelectableTextInsideDiPlay() {
         val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
         val activity = controller.get()
@@ -55,6 +89,16 @@ class DiagnosticExportUiTest {
         ReflectionHelpers.setField(activity, "qdriveConfigurationReport", configurationReport)
         val claimReport = "${ActiveConfig5UsbMuxClaimDiagnostic.TITLE}\n${ActiveConfig5UsbMuxClaimDiagnostic.PASS}\n${ActiveConfig5UsbMuxClaimDiagnostic.PROTOCOL_NOT_TESTED}"
         ReflectionHelpers.setField(activity, "activeConfig5ClaimReport", claimReport)
+        val versionReport = "${UsbMuxVersionDiagnostic.TITLE}\n${UsbMuxVersionDiagnostic.PASS}\nSETUP07 / LOCKDOWN / PAIRING NOT STARTED"
+        ReflectionHelpers.setField(activity, "usbMuxVersionReport", versionReport)
+        val lockdownReport = "${ReadOnlyLockdownDiagnostic.TITLE}\n${ReadOnlyLockdownDiagnostic.PASS}\nProductType=iPhone11,2"
+        ReflectionHelpers.setField(activity, "readOnlyLockdownReport", lockdownReport)
+        val pairReport = "${ControlledPairDiagnostic.TITLE}\n${ControlledPairDiagnostic.PASS}\nMode=validation-only"
+        val existingReport = "${ExistingPairValidationDiagnostic.TITLE}\nPair count = 0\nOutcome=STOP"
+        val localReport = "${LocalPairMetadataDiagnostic.TITLE}\nRecord entries=0"
+        ReflectionHelpers.setField(activity, "controlledPairReport", pairReport)
+        ReflectionHelpers.setField(activity, "existingPairReport", existingReport)
+        ReflectionHelpers.setField(activity, "localPairMetadataReport", localReport)
         try {
             ReflectionHelpers.callInstanceMethod<Unit>(activity, "chooseReportDestination")
             val deadline = System.nanoTime() + 5_000_000_000L
@@ -77,6 +121,11 @@ class DiagnosticExportUiTest {
             assertTrue(file.readText().contains(transitionReport))
             assertTrue(file.readText().contains(configurationReport))
             assertTrue(file.readText().contains(claimReport))
+            assertTrue(file.readText().contains(versionReport))
+            assertTrue(file.readText().contains(existingReport))
+            assertTrue(file.readText().contains(localReport))
+            assertTrue(file.readText().contains(lockdownReport))
+            assertTrue(file.readText().contains(pairReport))
             saved.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick()
             shadowOf(Looper.getMainLooper()).idle()
             val viewer = ShadowAlertDialog.getLatestAlertDialog()

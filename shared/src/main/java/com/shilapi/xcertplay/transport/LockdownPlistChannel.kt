@@ -63,10 +63,11 @@ class LockdownPlistChannel(
     fun request(
         message: LockdownPlistValue.Dictionary,
         timeoutMillis: Long = defaultTimeoutMillis,
+        onSending: (Int) -> Unit = {},
     ): LockdownPlistValue.Dictionary = synchronized(ioLock) {
         validateTimeout(timeoutMillis)
         checkOpen()
-        sendLocked(message)
+        sendLocked(message, onSending)
         receiveLocked(timeoutMillis)
     }
 
@@ -98,7 +99,7 @@ class LockdownPlistChannel(
         if (shouldClose && !detached) connection.close()
     }
 
-    private fun sendLocked(message: LockdownPlistValue.Dictionary) {
+    private fun sendLocked(message: LockdownPlistValue.Dictionary, onSending: (Int) -> Unit = {}) {
         val xml = encode(message).toByteArray(StandardCharsets.UTF_8)
         if (xml.isEmpty() || xml.size > maximumMessageBytes) {
             throw IphoneUsbException.Protocol("Lockdown plist message length ${xml.size} is outside 1..$maximumMessageBytes")
@@ -106,6 +107,7 @@ class LockdownPlistChannel(
         val frame = ByteArray(LENGTH_BYTES + xml.size)
         putU32(frame, 0, xml.size.toLong())
         xml.copyInto(frame, LENGTH_BYTES)
+        onSending(frame.size)
         connection.send(frame)
     }
 

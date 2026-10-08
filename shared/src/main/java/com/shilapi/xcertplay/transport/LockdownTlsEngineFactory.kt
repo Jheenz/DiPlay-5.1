@@ -1,6 +1,5 @@
 package com.shilapi.xcertplay.transport
 
-import android.annotation.SuppressLint
 import android.os.Build
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
@@ -13,17 +12,23 @@ import java.security.spec.PKCS8EncodedKeySpec
 import javax.net.ssl.KeyManagerFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
-import javax.net.ssl.X509TrustManager
 
 /**
  * Builds an unstarted client TLS engine for the dedicated USB Lockdown channel.
  *
- * Matching the locked transport behavior, the engine does not authenticate the peer certificate.
- * It must not be reused for internet or general-purpose TLS connections.
+ * The client identity is the pair record's RootCertificate/RootPrivateKey (as libimobiledevice
+ * uses). The server is authenticated by [LockdownPeerCertificateValidator] against the paired
+ * device public key; there is no trust-all fallback. Not for internet or general-purpose TLS.
  */
 object LockdownTlsEngineFactory {
     @Throws(GeneralSecurityException::class)
-    fun create(pairRecord: LockdownPairRecord): SSLEngine {
+    fun create(
+        pairRecord: LockdownPairRecord,
+        peerValidator: LockdownPeerCertificateValidator = LockdownPeerCertificateValidator.from(pairRecord),
+    ): SSLEngine {
+        if (!peerValidator.expectedDeviceCertificatePresent) {
+            throw GeneralSecurityException("Paired device certificate is missing or unreadable")
+        }
         val password = charArrayOf('l', 'o', 'c', 'k', 'd', 'o', 'w', 'n')
         // Lockdown presents the root identity from the pair record for both the session and
         // service TLS channels. HostCertificate is part of pairing, not this TLS identity.
@@ -44,7 +49,7 @@ object LockdownTlsEngineFactory {
                 init(keyStore, password)
             }.keyManagers
             val context = SSLContext.getInstance("TLS").apply {
-                init(keyManagers, arrayOf(UsbLockdownTrustManager), null)
+                init(keyManagers, arrayOf(peerValidator.trustManager()), null)
             }
             return context.createSSLEngine(PEER_HOST, PEER_PORT).apply {
                 useClientMode = true
@@ -87,15 +92,6 @@ object LockdownTlsEngineFactory {
             if (matches) return offset
         }
         return -1
-    }
-
-    @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
-    private object UsbLockdownTrustManager : X509TrustManager {
-        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
-
-        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) = Unit
-
-        override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
     }
 
     private const val KEY_ALIAS = "lockdown-host"

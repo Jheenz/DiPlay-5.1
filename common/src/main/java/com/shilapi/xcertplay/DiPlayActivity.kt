@@ -153,6 +153,46 @@ class DiPlayActivity : ComponentActivity() {
     private var activeConfig5ClaimText: TextView? = null
     private var activeConfig5ClaimButton: Button? = null
     private var activeConfig5ClaimRunning = false
+    private var usbMuxVersionAccess: UsbMuxVersionAccess? = null
+    private var usbMuxVersionObserver: (Context, (QDriveUsbEvent) -> Unit) -> java.io.Closeable =
+        ::observeAndroidUsbEvents
+    private var usbMuxVersionDiagnostic: UsbMuxVersionDiagnostic? = null
+    private var usbMuxVersionReport = UsbMuxVersionDiagnostic.NOT_RUN
+    private var usbMuxVersionText: TextView? = null
+    private var usbMuxVersionButton: Button? = null
+    private var usbMuxVersionRunning = false
+    private var readOnlyLockdownAccess: ReadOnlyLockdownAccess? = null
+    private var readOnlyLockdownObserver: (Context, (QDriveUsbEvent) -> Unit) -> java.io.Closeable =
+        ::observeAndroidUsbEvents
+    private var readOnlyLockdownDiagnostic: ReadOnlyLockdownDiagnostic? = null
+    private var readOnlyLockdownReport = ReadOnlyLockdownDiagnostic.NOT_RUN
+    private var readOnlyLockdownText: TextView? = null
+    private var readOnlyLockdownButton: Button? = null
+    private var readOnlyLockdownRunning = false
+    private var controlledPairAccess: ReadOnlyLockdownAccess? = null
+    private var controlledPairStore: DiagnosticPairStore? = null
+    private var controlledPairObserver: (Context, (QDriveUsbEvent) -> Unit) -> java.io.Closeable =
+        ::observeAndroidUsbEvents
+    private var controlledPairDiagnostic: ControlledPairDiagnostic? = null
+    private var controlledPairReport = ControlledPairDiagnostic.NOT_RUN
+    private var controlledPairText: TextView? = null
+    private var controlledPairButton: Button? = null
+    private var controlledPairRunning = false
+    private var existingPairReport = ExistingPairValidationDiagnostic.NOT_RUN
+    private var existingPairText: TextView? = null
+    private var existingPairButton: Button? = null
+    private var localPairMetadataAccess: LocalPairMetadataAccess? = null
+    private var localPairMetadataReport = LocalPairMetadataDiagnostic.NOT_RUN
+    private var localPairMetadataText: TextView? = null
+    private var localPairMetadataButton: Button? = null
+    private var localPairMetadataRunning = false
+    private var modernStartSessionDiagnostic: ModernStartSessionDiagnostic? = null
+    private var modernStartSessionReport = ModernStartSessionDiagnostic.NOT_RUN
+    private var modernStartSessionText: TextView? = null
+    private var modernStartSessionButton: Button? = null
+    private var modernLockdownTlsReport = ModernStartSessionDiagnostic.TLS_NOT_RUN
+    private var modernLockdownTlsText: TextView? = null
+    private var modernLockdownTlsButton: Button? = null
     private var directUsbMuxAccess: com.shilapi.xcertplay.transport.DirectUsbMuxAccess? = null
     private var directUsbMuxDiagnostic: com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic? = null
     private var directUsbMuxReport = com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic.NOT_RUN
@@ -349,6 +389,10 @@ class DiPlayActivity : ComponentActivity() {
         qdriveTransitionDiagnostic?.cancel()
         qdriveConfigurationDiagnostic?.cancel()
         activeConfig5ClaimDiagnostic?.cancel()
+        usbMuxVersionDiagnostic?.cancel()
+        readOnlyLockdownDiagnostic?.cancel()
+        controlledPairDiagnostic?.cancel()
+        modernStartSessionDiagnostic?.cancel()
         qdriveTransitionPrepared = null
         qdriveTransitionButton?.isEnabled = false
         directUsbMuxDiagnostic?.takeIf { directUsbMuxRunning }?.cancel("Activity paused — STOP")
@@ -374,6 +418,10 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        readOnlyLockdownDiagnostic?.cancel()
+        controlledPairDiagnostic?.cancel()
+        modernStartSessionDiagnostic?.cancel()
+        usbMuxVersionDiagnostic?.cancel()
         qdriveTransitionDiagnostic?.cancel()
         qdriveConfigurationDiagnostic?.cancel()
         directUsbMuxDiagnostic?.takeIf { directUsbMuxRunning }?.cancel("Activity destroyed — STOP")
@@ -973,10 +1021,10 @@ class DiPlayActivity : ComponentActivity() {
                 phase3AText = label(phase3AReport, 15, TEXT).apply { setTextIsSelectable(true) }
                 card.addView(phase3AText)
                 card.addView(button(getString(R.string.phase3a_refresh), false) {
-                    phase3ADiagnostics?.refresh()
+                    if (!controlledPairBusy()) phase3ADiagnostics?.refresh()
                 }, matchButton())
                 card.addView(button(getString(R.string.phase3a_start), false) {
-                    phase3ADiagnostics?.startNetworkTest()
+                    if (!controlledPairBusy()) phase3ADiagnostics?.startNetworkTest()
                 }, matchButton())
             }
         }
@@ -1051,6 +1099,69 @@ class DiPlayActivity : ComponentActivity() {
                 card.addView(button(getString(R.string.phase3d2_trust_stop), false) {
                     stopDirectUsbMuxDiagnostic("Trust prompt observed by user — STOP; do not approve")
                 }, matchButton())
+            }
+            section(content, getString(R.string.phase3d2k_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2k_warning), 18, WARNING))
+                usbMuxVersionText = label(usbMuxVersionReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(usbMuxVersionText)
+                usbMuxVersionButton = button(getString(R.string.phase3d2k_test), false) {
+                    confirmUsbMuxVersionExchange()
+                }.apply { setTextColor(WARNING); isEnabled = !usbMuxVersionRunning }
+                card.addView(usbMuxVersionButton, matchButton())
+            }
+            section(content, getString(R.string.readonly_lockdown_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.readonly_lockdown_warning), 18, WARNING))
+                readOnlyLockdownText = label(readOnlyLockdownReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(readOnlyLockdownText)
+                readOnlyLockdownButton = button(getString(R.string.readonly_lockdown_test), false) {
+                    confirmReadOnlyLockdownDiscovery()
+                }.apply { setTextColor(WARNING); isEnabled = !readOnlyLockdownRunning }
+                card.addView(readOnlyLockdownButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2o_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3d2o_warning), 18, WARNING))
+                controlledPairText = label(controlledPairReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(controlledPairText)
+                controlledPairButton = button(getString(R.string.phase3d2o_test), false) {
+                    confirmControlledPairDiagnostic()
+                }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
+                card.addView(controlledPairButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2p1_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(ExistingPairValidationDiagnostic.SAFETY, 18, WARNING))
+                existingPairText = label(existingPairReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(existingPairText)
+                existingPairButton = button(getString(R.string.phase3d2p1_test), false) {
+                    confirmExistingPairValidation()
+                }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
+                card.addView(existingPairButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2s_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(ModernStartSessionDiagnostic.SAFETY, 18, WARNING))
+                modernStartSessionText = label(modernStartSessionReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(modernStartSessionText)
+                modernStartSessionButton = button(getString(R.string.phase3d2s_test), false) {
+                    confirmModernStartSession()
+                }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
+                card.addView(modernStartSessionButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2u_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(ModernStartSessionDiagnostic.TLS_SAFETY, 18, WARNING))
+                modernLockdownTlsText = label(modernLockdownTlsReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(modernLockdownTlsText)
+                modernLockdownTlsButton = button(getString(R.string.phase3d2u_test), false) {
+                    confirmModernStartSession(tls = true)
+                }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
+                card.addView(modernLockdownTlsButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2p2_local_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(LocalPairMetadataDiagnostic.SAFETY, 18, WARNING))
+                localPairMetadataText = label(localPairMetadataReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(localPairMetadataText)
+                localPairMetadataButton = button(getString(R.string.phase3d2p2_local_test), false) {
+                    inspectLocalPairMetadata()
+                }.apply { isEnabled = !localPairMetadataRunning }
+                card.addView(localPairMetadataButton, matchButton())
             }
             section(content, getString(R.string.phase3d2i_title), R.drawable.ic_dp_diagnostics) { card ->
                 card.addView(label(getString(R.string.phase3d2i_warning), 18, WARNING))
@@ -1170,6 +1281,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun readNforetekCache() {
+        if (controlledPairBusy()) return
         if (nforetekCacheRunning) return
         try {
             nforetekCacheDiagnostics?.close()
@@ -1212,6 +1324,7 @@ class DiPlayActivity : ComponentActivity() {
         appleStack: Boolean = false,
         appleDiscovery: Boolean = false,
     ) {
+        if (controlledPairBusy()) return
         if (vendorApkExportRunning) return
         vendorApkExportRunning = true
         vendorApkExportReport = if (appleDiscovery) {
@@ -1237,6 +1350,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun runPhase3B8Inventory() {
+        if (controlledPairBusy()) return
         if (phase3b8Running) return
         phase3b8Running = true
         phase3b8Status = getString(R.string.phase3b8_scanning)
@@ -1294,8 +1408,9 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun runDirectUsbMuxDiagnostic() {
+        if (readOnlyLockdownBusy()) return
         if (directUsbMuxRunning) return
-        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning) {
+        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning || usbMuxVersionRunning) {
             toast(getString(R.string.phase3d2c1_busy))
             return
         }
@@ -1347,8 +1462,9 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun readActiveUsbConfiguration() {
+        if (readOnlyLockdownBusy()) return
         if (activeUsbConfigurationRunning) return
-        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning) {
+        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning || usbMuxVersionRunning) {
             toast(getString(R.string.phase3d2c1_busy))
             return
         }
@@ -1392,8 +1508,9 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun inspectIphoneInterfaceStrings() {
+        if (readOnlyLockdownBusy()) return
         if (qdriveDescriptorRunning) return
-        if (directUsbMuxRunning || activeUsbConfigurationRunning || qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning) {
+        if (directUsbMuxRunning || activeUsbConfigurationRunning || qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning || usbMuxVersionRunning) {
             toast(getString(R.string.phase3d2c1_busy))
             return
         }
@@ -1428,11 +1545,335 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun qdriveTransitionBusy(): Boolean {
-        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning || directUsbMuxRunning || activeUsbConfigurationRunning || qdriveDescriptorRunning) {
+        if (readOnlyLockdownBusy()) return true
+        if (qdriveTransitionRunning || qdriveConfigurationRunning || activeConfig5ClaimRunning || usbMuxVersionRunning || directUsbMuxRunning || activeUsbConfigurationRunning || qdriveDescriptorRunning) {
             toast(getString(R.string.phase3d2c1_busy))
             return true
         }
         return false
+    }
+
+    private fun readOnlyLockdownBusy(): Boolean {
+        if (controlledPairBusy()) return true
+        if (!readOnlyLockdownRunning) return false
+        toast(getString(R.string.phase3d2c1_busy))
+        return true
+    }
+
+    private fun controlledPairBusy(): Boolean {
+        if (!controlledPairRunning) return false
+        toast(getString(R.string.phase3d2o_busy))
+        return true
+    }
+
+    private fun controlledPairDiagnosticsBusy(): Boolean =
+        nforetekCacheRunning || vendorApkExportRunning || phase3b8Running ||
+            passiveI2cInventoryRunning || passiveUsbRunning || usbConfigurationRunning ||
+            activeUsbConfigurationRunning || qdriveDescriptorRunning || qdriveTransitionRunning ||
+            qdriveConfigurationRunning || activeConfig5ClaimRunning || usbMuxVersionRunning ||
+            readOnlyLockdownRunning || directUsbMuxRunning
+
+    private fun inspectLocalPairMetadata() {
+        if (localPairMetadataRunning || controlledPairRunning) {
+            toast(getString(R.string.phase3d2o_busy))
+            return
+        }
+        localPairMetadataRunning = true
+        localPairMetadataButton?.isEnabled = false
+        val app = applicationContext
+        Thread({
+            val report = LocalPairMetadataDiagnostic(LocalPairMetadataAccess {
+                (localPairMetadataAccess ?: AndroidDiagnosticPairStore(app)).inspect()
+            }).run()
+            runOnUiThread {
+                localPairMetadataRunning = false
+                localPairMetadataReport = report
+                if (!isFinishing && !isDestroyed) {
+                    localPairMetadataText?.text = report
+                    localPairMetadataButton?.isEnabled = true
+                }
+            }
+        }, "diplay-local-pair-metadata").start()
+    }
+
+    private fun confirmControlledPairDiagnostic() = confirmPairDiagnostic(false)
+
+    private fun confirmModernStartSession(tls: Boolean = false) {
+        val notRun = if (tls) ModernStartSessionDiagnostic.TLS_NOT_RUN else ModernStartSessionDiagnostic.NOT_RUN
+        fun publish(text: String) {
+            if (tls) { modernLockdownTlsReport = text; modernLockdownTlsText?.text = text }
+            else { modernStartSessionReport = text; modernStartSessionText?.text = text }
+        }
+        fun enableButtons(enabled: Boolean) {
+            modernStartSessionButton?.isEnabled = enabled
+            modernLockdownTlsButton?.isEnabled = enabled
+            controlledPairButton?.isEnabled = enabled
+            existingPairButton?.isEnabled = enabled
+        }
+        if (localPairMetadataRunning || controlledPairRunning || controlledPairDiagnosticsBusy()) {
+            toast(getString(R.string.phase3d2o_busy))
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle(if (tls) R.string.phase3d2u_title else R.string.phase3d2s_title)
+            .setMessage(if (tls) R.string.phase3d2u_confirm else R.string.phase3d2s_confirm)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(if (tls) R.string.phase3d2u_test else R.string.phase3d2s_test) { _, _ ->
+                if (localPairMetadataRunning || controlledPairRunning || controlledPairDiagnosticsBusy()) {
+                    toast(getString(R.string.phase3d2o_busy))
+                    return@setPositiveButton
+                }
+                val app = applicationContext
+                val diagnostic = try {
+                    val access = controlledPairAccess ?: object : ReadOnlyLockdownAccess {
+                        private fun adapter(): AndroidReadOnlyLockdownAccess {
+                            val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                                ?: error("Android USB host service unavailable")
+                            return AndroidReadOnlyLockdownAccess(manager)
+                        }
+                        override fun devices() = adapter().devices()
+                        override fun open(device: PassiveUsbDevice) = adapter().open(device)
+                    }
+                    val store = controlledPairStore ?: AndroidDiagnosticPairStore(app)
+                    val records = object : com.shilapi.xcertplay.transport.AcceptedSessionRecords {
+                        override fun acceptedRecords() = store.acceptedRecords()
+                        override fun load(deviceId: String) = store.load(deviceId)
+                    }
+                    ModernStartSessionDiagnostic(access, records, tlsRoundTrip = tls)
+                } catch (error: Exception) {
+                    publish("${notRun}\nInitialization failed=${error.javaClass.simpleName}; STOP")
+                    return@setPositiveButton
+                } catch (error: LinkageError) {
+                    publish("${notRun}\nInitialization failed=${error.javaClass.simpleName}; STOP")
+                    return@setPositiveButton
+                }
+                val observer = try {
+                    controlledPairObserver(app) { event ->
+                        if ((event.action == "DETACH" && event.vendorId == 0x05ac) || event.action == "ERROR") {
+                            diagnostic.deviceDetached()
+                        }
+                    }
+                } catch (error: Exception) {
+                    publish("${notRun}\nDetach observer failed=${error.javaClass.simpleName}; no USB work; STOP")
+                    return@setPositiveButton
+                }
+                modernStartSessionDiagnostic = diagnostic
+                controlledPairRunning = true
+                enableButtons(false)
+                publish(getString(if (tls) R.string.phase3d2u_running else R.string.phase3d2s_running))
+                Thread({
+                    var report = diagnostic.run()
+                    try { observer.close() }
+                    catch (error: Exception) {
+                        report = report.lineSequence().filterNot {
+                            it == com.shilapi.xcertplay.transport.ControlledStartSession.TLS_REQUIRED ||
+                                it == com.shilapi.xcertplay.transport.ControlledStartSession.SSL_NOT_REQUIRED ||
+                                it == com.shilapi.xcertplay.transport.ControlledLockdownTlsSession.CONFIRMED
+                        }.joinToString("\n") + "\nObserver cleanup failed=${error.javaClass.simpleName}; confirmation withheld; STOP"
+                    }
+                    runOnUiThread {
+                        controlledPairRunning = false
+                        modernStartSessionDiagnostic = null
+                        if (!isFinishing && !isDestroyed) {
+                            publish(report)
+                            enableButtons(true)
+                        } else if (tls) modernLockdownTlsReport = report else modernStartSessionReport = report
+                    }
+                }, if (tls) "diplay-modern-lockdown-tls" else "diplay-modern-startsession").start()
+            }.show()
+    }
+
+    private fun confirmExistingPairValidation() = confirmPairDiagnostic(true)
+
+    private fun confirmPairDiagnostic(existingOnly: Boolean) {
+        if (localPairMetadataRunning || controlledPairRunning || controlledPairDiagnosticsBusy()) {
+            toast(getString(R.string.phase3d2o_busy))
+            return
+        }
+        val title = if (existingOnly) ExistingPairValidationDiagnostic.TITLE else ControlledPairDiagnostic.TITLE
+        val safety = if (existingOnly) ExistingPairValidationDiagnostic.SAFETY else ControlledPairDiagnostic.SAFETY
+        fun display(report: String) {
+            if (existingOnly) { existingPairReport = report; existingPairText?.text = report }
+            else { controlledPairReport = report; controlledPairText?.text = report }
+        }
+        AlertDialog.Builder(this)
+            .setTitle(getString(if (existingOnly) R.string.phase3d2p1_title else R.string.phase3d2o_title))
+            .setMessage(getString(if (existingOnly) R.string.phase3d2p1_confirm else R.string.phase3d2o_confirm))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(getString(if (existingOnly) R.string.phase3d2p1_test else R.string.phase3d2o_test)) { _, _ ->
+                if (localPairMetadataRunning || controlledPairRunning || controlledPairDiagnosticsBusy()) {
+                    toast(getString(R.string.phase3d2o_busy))
+                    return@setPositiveButton
+                }
+                val app = applicationContext
+                val diagnostic = try {
+                    val access = controlledPairAccess ?: object : ReadOnlyLockdownAccess {
+                        private fun adapter(): AndroidReadOnlyLockdownAccess {
+                            val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                                ?: error("Android USB host service unavailable")
+                            return AndroidReadOnlyLockdownAccess(manager)
+                        }
+                        override fun devices() = adapter().devices()
+                        override fun open(device: PassiveUsbDevice) = adapter().open(device)
+                    }
+                    val store = controlledPairStore ?: AndroidDiagnosticPairStore(app)
+                    ControlledPairDiagnostic(access, store, existingOnly = existingOnly)
+                } catch (error: Throwable) {
+                    display("$title\n$safety\n" +
+                        com.shilapi.xcertplay.transport.PairDiagnosticFailureDetails.format("INITIALIZATION", error) + "Outcome=STOP")
+                    return@setPositiveButton
+                }
+                var observation = "USB detach observation=REGISTERED (application receiver ATTACH/DETACH; " +
+                    "any Apple DETACH or missing metadata latches DEVICE_DISAPPEARED)"
+                val usbEvents = try {
+                    controlledPairObserver(app) { event ->
+                        if ((event.action == "DETACH" && event.vendorId == 0x05ac) || event.action == "ERROR") {
+                            diagnostic.deviceDetached()
+                        }
+                        if (event.action == "ATTACH" && event.vendorId == 0x05ac) diagnostic.deviceAttached()
+                    }
+                } catch (error: Exception) {
+                    diagnostic.cancel()
+                    observation = "USB detach observation=FAILED ${error.javaClass.simpleName}; " +
+                        "cancelled before USB work — STOP"
+                    null
+                }
+                controlledPairDiagnostic = diagnostic
+                controlledPairRunning = true
+                controlledPairButton?.isEnabled = false
+                existingPairButton?.isEnabled = false
+                display("${getString(if (existingOnly) R.string.phase3d2p1_running else R.string.phase3d2o_running)}\n$safety")
+                Thread({
+                    val engineReport = try {
+                        diagnostic.run()
+                    } catch (error: Throwable) {
+                        "$title\n$safety\n" +
+                            com.shilapi.xcertplay.transport.PairDiagnosticFailureDetails.format("UI_DIAGNOSTIC", error) + "Outcome=STOP"
+                    }
+                    var observerCleanupFailed = false
+                    val observerCleanup = if (usbEvents == null) {
+                        "USB detach observer cleanup=NOT NEEDED (not registered)"
+                    } else try {
+                        usbEvents.close()
+                        "USB detach observer cleanup=PASS"
+                    } catch (error: Exception) {
+                        observerCleanupFailed = true
+                        "USB detach observer cleanup=FAILED errorClass=${error.javaClass.simpleName}; PASS withheld — STOP"
+                    }
+                    val report = buildString {
+                        engineReport.trimEnd().lineSequence().forEach { line ->
+                            appendLine(when {
+                                observerCleanupFailed && (line == ControlledPairDiagnostic.PASS ||
+                                    line == ExistingPairValidationDiagnostic.PASS) ->
+                                    "Pair/ValidatePair confirmation withheld: observer cleanup failed — STOP"
+                                observerCleanupFailed && line == "Outcome=PASS" ->
+                                    "Outcome=USB_EVENT_OBSERVER_CLEANUP_FAILURE — STOP"
+                                else -> line
+                            })
+                        }
+                        appendLine(observation)
+                        appendLine(observerCleanup)
+                    }
+                    runOnUiThread {
+                        controlledPairRunning = false
+                        if (existingOnly) existingPairReport = report else controlledPairReport = report
+                        if (!isFinishing && !isDestroyed) {
+                            display(report)
+                            controlledPairButton?.isEnabled = true
+                            existingPairButton?.isEnabled = true
+                        }
+                    }
+                }, "diplay-controlled-pair-validate").start()
+            }.show()
+    }
+
+    private fun confirmReadOnlyLockdownDiscovery() {
+        if (controlledPairRunning) {
+            toast(getString(R.string.phase3d2o_busy))
+            return
+        }
+        if (qdriveTransitionBusy() || passiveUsbRunning || usbConfigurationRunning) return
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.readonly_lockdown_title))
+            .setMessage(getString(R.string.readonly_lockdown_confirm))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(getString(R.string.readonly_lockdown_run)) { _, _ ->
+                if (controlledPairRunning || qdriveTransitionBusy() || passiveUsbRunning || usbConfigurationRunning) return@setPositiveButton
+                val app = applicationContext
+                val access = readOnlyLockdownAccess ?: object : ReadOnlyLockdownAccess {
+                    private fun adapter(): AndroidReadOnlyLockdownAccess {
+                        val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                            ?: error("Android USB host service unavailable")
+                        return AndroidReadOnlyLockdownAccess(manager)
+                    }
+                    override fun devices() = adapter().devices()
+                    override fun open(device: PassiveUsbDevice) = adapter().open(device)
+                }
+                val diagnostic = ReadOnlyLockdownDiagnostic(access)
+                var observation = "USB detach observation=REGISTERED (application receiver ATTACH/DETACH; " +
+                    "any Apple DETACH or missing metadata latches DEVICE_DISAPPEARED)"
+                val usbEvents = try {
+                    readOnlyLockdownObserver(app) { event ->
+                        if ((event.action == "DETACH" && event.vendorId == 0x05ac) || event.action == "ERROR") {
+                            diagnostic.deviceDetached()
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.w("DiPlayReadOnlyLockdown", "USB event observation unavailable; STOP", error)
+                    diagnostic.cancel()
+                    observation = "USB detach observation=FAILED ${error.javaClass.simpleName}: ${error.message}; " +
+                        "cancelled before USB work — STOP"
+                    null
+                }
+                readOnlyLockdownDiagnostic = diagnostic
+                readOnlyLockdownRunning = true
+                readOnlyLockdownButton?.isEnabled = false
+                qdriveTransitionPrepared = null
+                qdriveTransitionButton?.isEnabled = false
+                readOnlyLockdownReport = "${getString(R.string.readonly_lockdown_running)}\n${ReadOnlyLockdownDiagnostic.SAFETY}"
+                readOnlyLockdownText?.text = readOnlyLockdownReport
+                Thread({
+                    val engineReport = try {
+                        diagnostic.run()
+                    } catch (error: Throwable) {
+                        Log.w("DiPlayReadOnlyLockdown", "Diagnostic failed unexpectedly", error)
+                        "${ReadOnlyLockdownDiagnostic.TITLE}\n${ReadOnlyLockdownDiagnostic.SAFETY}\n" +
+                            "Outcome=UNEXPECTED_DIAGNOSTIC_FAILURE ${error.javaClass.simpleName}: ${error.message} — STOP\n"
+                    }
+                    var observerCleanupFailed = false
+                    val observerCleanup = if (usbEvents == null) {
+                        "USB detach observer cleanup=NOT NEEDED (not registered)"
+                    } else try {
+                        usbEvents.close()
+                        "USB detach observer cleanup=PASS"
+                    } catch (error: Exception) {
+                        Log.w("DiPlayReadOnlyLockdown", "USB event observer cleanup failed", error)
+                        observerCleanupFailed = true
+                        "USB detach observer cleanup=FAILED ${error.javaClass.simpleName}: ${error.message}; PASS withheld — STOP"
+                    }
+                    val report = buildString {
+                        engineReport.trimEnd().lineSequence().forEach { line ->
+                            appendLine(when {
+                                observerCleanupFailed && line == ReadOnlyLockdownDiagnostic.PASS ->
+                                    "Read-only discovery confirmation withheld: observer cleanup failed — STOP"
+                                observerCleanupFailed && line == "Outcome=PASS" ->
+                                    "Outcome=USB_EVENT_OBSERVER_CLEANUP_FAILURE — STOP"
+                                else -> line
+                            })
+                        }
+                        appendLine(observation)
+                        appendLine(observerCleanup)
+                    }
+                    runOnUiThread {
+                        readOnlyLockdownRunning = false
+                        readOnlyLockdownReport = report
+                        if (!isFinishing && !isDestroyed) {
+                            readOnlyLockdownText?.text = report
+                            readOnlyLockdownButton?.isEnabled = true
+                        }
+                    }
+                }, "diplay-readonly-lockdown-discovery").start()
+            }.show()
     }
 
     private fun newQDriveTransitionDiagnostic(): QDriveVendorTransitionDiagnostic {
@@ -1449,6 +1890,87 @@ class DiPlayActivity : ComponentActivity() {
             override fun observe(onEvent: (QDriveUsbEvent) -> Unit) = adapter().observe(onEvent)
         }
         return QDriveVendorTransitionDiagnostic(access)
+    }
+
+    private fun confirmUsbMuxVersionExchange() {
+        if (qdriveTransitionBusy()) return
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.phase3d2k_test))
+            .setMessage(getString(R.string.phase3d2k_confirm))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(getString(R.string.phase3d2k_send)) { _, _ ->
+                if (qdriveTransitionBusy()) return@setPositiveButton
+                val app = applicationContext
+                val access = usbMuxVersionAccess ?: object : UsbMuxVersionAccess {
+                    private fun adapter(): AndroidUsbMuxVersionAccess {
+                        val manager = app.getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                            ?: error("Android USB host service unavailable")
+                        return AndroidUsbMuxVersionAccess(manager)
+                    }
+                    override fun devices() = adapter().devices()
+                    override fun open(device: PassiveUsbDevice) = adapter().open(device)
+                }
+                val diagnostic = UsbMuxVersionDiagnostic(access)
+                var observation = "USB detach observation=REGISTERED (application receiver ATTACH/DETACH; " +
+                    "any Apple DETACH or missing metadata latches DEVICE_DISAPPEARED)"
+                val usbEvents = try {
+                    usbMuxVersionObserver(app) { event ->
+                        if ((event.action == "DETACH" && event.vendorId == 0x05ac) || event.action == "ERROR") {
+                            diagnostic.deviceDetached()
+                        }
+                    }
+                } catch (error: Exception) {
+                    Log.w("DiPlayUsbMuxVersion", "USB event observation unavailable; STOP", error)
+                    diagnostic.cancel()
+                    observation = "USB detach observation=FAILED ${error.javaClass.simpleName}: ${error.message}; " +
+                        "cancelled before USB work — STOP"
+                    null
+                }
+                usbMuxVersionDiagnostic = diagnostic
+                usbMuxVersionRunning = true
+                usbMuxVersionButton?.isEnabled = false
+                qdriveTransitionPrepared = null
+                qdriveTransitionButton?.isEnabled = false
+                usbMuxVersionReport = "${getString(R.string.phase3d2k_running)}\n${UsbMuxVersionDiagnostic.SAFETY}"
+                usbMuxVersionText?.text = usbMuxVersionReport
+                Thread({
+                    val engineReport = try {
+                        diagnostic.run()
+                    } catch (error: Throwable) {
+                        Log.w("DiPlayUsbMuxVersion", "Diagnostic failed unexpectedly", error)
+                        "${UsbMuxVersionDiagnostic.TITLE}\n${UsbMuxVersionDiagnostic.SAFETY}\n" +
+                            "Outcome=UNEXPECTED_DIAGNOSTIC_FAILURE ${error.javaClass.simpleName}: ${error.message} — STOP\n"
+                    }
+                    var observerCleanupFailed = false
+                    val observerCleanup = if (usbEvents == null) {
+                        "USB detach observer cleanup=NOT NEEDED (not registered)"
+                    } else try {
+                        usbEvents.close()
+                        "USB detach observer cleanup=PASS"
+                    } catch (error: Exception) {
+                        Log.w("DiPlayUsbMuxVersion", "USB event observer cleanup failed", error)
+                        observerCleanupFailed = true
+                        "USB detach observer cleanup=FAILED ${error.javaClass.simpleName}: ${error.message}; PASS withheld — STOP"
+                    }
+                    val report = buildString {
+                        engineReport.trimEnd().lineSequence().forEach { line ->
+                            appendLine(if (observerCleanupFailed && line == UsbMuxVersionDiagnostic.PASS) {
+                                "Outcome=USB_EVENT_OBSERVER_CLEANUP_FAILURE — STOP"
+                            } else line)
+                        }
+                        appendLine(observation)
+                        appendLine(observerCleanup)
+                    }
+                    runOnUiThread {
+                        usbMuxVersionRunning = false
+                        usbMuxVersionReport = report
+                        if (!isFinishing && !isDestroyed) {
+                            usbMuxVersionText?.text = report
+                            usbMuxVersionButton?.isEnabled = true
+                        }
+                    }
+                }, "diplay-usbmux-version-only").start()
+            }.show()
     }
 
     private fun confirmActiveConfig5UsbMuxClaim() {
@@ -1591,6 +2113,7 @@ class DiPlayActivity : ComponentActivity() {
     private fun runPassiveUsbInventory() = runPassiveUsbScan(configurationMapping = false)
 
     private fun runPassiveUsbScan(configurationMapping: Boolean) {
+        if (readOnlyLockdownBusy()) return
         if (if (configurationMapping) usbConfigurationRunning else passiveUsbRunning) return
         val pending = "${getString(R.string.phase3d1_running)}\n${PassiveUsbDeviceDiagnostic.SAFETY}"
         if (configurationMapping) {
@@ -1634,6 +2157,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun runPassiveI2cInventory() {
+        if (controlledPairBusy()) return
         if (passiveI2cInventoryRunning) return
         passiveI2cInventoryRunning = true
         passiveI2cInventoryReport = getString(R.string.phase3c3c_running)
@@ -1665,6 +2189,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun nforetekAction(bind: Boolean) {
+        if (controlledPairBusy()) return
         try {
             val diagnostics = nforetekDiagnostics ?: com.shilapi.xcertplay.transport.NForetekServiceDiagnostics(applicationContext) { report ->
                 runOnUiThread {
@@ -1701,6 +2226,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun startVendorInvestigation() {
+        if (controlledPairBusy()) return
         try {
             val investigation = vendorInvestigation ?: com.shilapi.xcertplay.transport.VehicleBluetoothInvestigation(applicationContext) { report ->
                 runOnUiThread {
@@ -1725,6 +2251,7 @@ class DiPlayActivity : ComponentActivity() {
     }
 
     private fun requestPhase3BAction(action: String) {
+        if (controlledPairBusy()) return
         if (!LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED) return
         if (action != "refresh" && !LegacyLaunchBuild.PHASE3B_TRANSPORT_TESTS_ENABLED) {
             phase3BReport = getString(R.string.phase3b_transport_disabled)
@@ -3648,6 +4175,13 @@ class DiPlayActivity : ComponentActivity() {
         val qdriveTransitionDiagnostics = qdriveTransitionReport
         val qdriveConfigurationDiagnostics = qdriveConfigurationReport
         val activeConfig5ClaimDiagnostics = activeConfig5ClaimReport
+        val usbMuxVersionDiagnostics = usbMuxVersionReport
+        val readOnlyLockdownDiagnostics = readOnlyLockdownReport
+        val controlledPairDiagnostics = controlledPairReport
+        val existingPairDiagnostics = existingPairReport
+        val localPairMetadataDiagnostics = localPairMetadataReport
+        val modernStartSessionDiagnostics = modernStartSessionReport
+        val modernLockdownTlsDiagnostics = modernLockdownTlsReport
         Thread({
             val result = runCatching {
                 val report = buildString {
@@ -3687,6 +4221,14 @@ class DiPlayActivity : ComponentActivity() {
                         appendLine(qdriveTransitionDiagnostics)
                         appendLine(qdriveConfigurationDiagnostics)
                         appendLine(activeConfig5ClaimDiagnostics)
+                        appendLine(usbMuxVersionDiagnostics)
+                        appendLine(readOnlyLockdownDiagnostics)
+                        appendLine("--- Phase 3D.2O controlled Lockdown Pair + ValidatePair ---")
+                        appendLine(controlledPairDiagnostics)
+                        appendLine(existingPairDiagnostics)
+                        appendLine(localPairMetadataDiagnostics)
+                        appendLine(modernStartSessionDiagnostics)
+                        appendLine(modernLockdownTlsDiagnostics)
                         return@buildString
                     }
                     appendLine("DiPlay ${version()} · private beta diagnostic report")
@@ -3771,6 +4313,13 @@ class DiPlayActivity : ComponentActivity() {
                     appendLine(qdriveDescriptorDiagnostics)
                     appendLine(qdriveTransitionDiagnostics)
                     appendLine(qdriveConfigurationDiagnostics)
+                    appendLine(usbMuxVersionDiagnostics)
+                    appendLine(readOnlyLockdownDiagnostics)
+                    appendLine("--- Phase 3D.2O controlled Lockdown Pair + ValidatePair ---")
+                    appendLine(controlledPairDiagnostics)
+                    appendLine(existingPairDiagnostics)
+                    appendLine(modernStartSessionDiagnostics)
+                    appendLine(modernLockdownTlsDiagnostics)
                 }
                 val savedReport = if (uri != null) {
                     DiagnosticExportStore.write(appContext.contentResolver, uri, report)
