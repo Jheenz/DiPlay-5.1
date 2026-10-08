@@ -43,7 +43,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".legacytest"
-            versionNameSuffix = "-api22-phase3d2u-lockdown-tls"
+            versionNameSuffix = "-api22-phase3d2w-retired-rst-payload-fix"
         }
         release {
             optimization {

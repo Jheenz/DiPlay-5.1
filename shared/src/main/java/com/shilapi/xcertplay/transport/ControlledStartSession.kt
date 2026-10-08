@@ -13,6 +13,9 @@ class StartSessionFailure(val classification: String, val safeReason: String, ca
 class ControlledStartSession(
     private val records: AcceptedSessionRecords,
     private val verify: (LockdownPairRecord) -> Unit = DiagnosticPairMaterial::verify,
+    private val requirePairedRecord: Boolean = false,
+    private val requireTls: Boolean = false,
+    private val strictResponseFields: Boolean = false,
 ) {
     private var preflight: DiagnosticPairCandidate? = null
     private var attempted = false
@@ -63,6 +66,22 @@ class ControlledStartSession(
                 "StopSession" -> TRANSPORT
                 else -> REJECTED
             }
+            if (strictResponseFields) {
+                val allowed = when (operation) {
+                    "GetValue" -> setOf("Request", "Value", "Result", "Error")
+                    "StartSession" -> setOf("Request", "SessionID", "EnableSessionSSL", "Result", "Error")
+                    else -> setOf("Request", "Result", "Error")
+                }
+                val extraFields = response.entries.keys - allowed
+                if (extraFields.isNotEmpty() && operation == "GetValue") {
+                    val recognized = extraFields.intersect(SAFE_GET_VALUE_METADATA_FIELDS).sorted()
+                    report("GetValue optional fields ignored; count=${extraFields.size}; " +
+                        "recognizedNames=${recognized.ifEmpty { listOf("NONE") }.joinToString(",")}; " +
+                        "unrecognizedCount=${extraFields.size - recognized.size}; values=REDACTED")
+                } else if (extraFields.isNotEmpty()) {
+                    throw StartSessionFailure(rejection, "UNEXPECTED_RESPONSE_FIELDS")
+                }
+            }
             if ((response.entries["Request"] as? LockdownPlistValue.Text)?.value != operation) {
                 throw StartSessionFailure(rejection, "RESPONSE_REQUEST_MISMATCH")
             }
@@ -112,6 +131,7 @@ class ControlledStartSession(
             throw StartSessionFailure(REJECTED, "MALFORMED_SESSION_RESPONSE; SESSION_STOP_NOT_CONFIRMED")
         }
         if (tls != null) {
+            if (requireTls) throw StartSessionFailure(REJECTED, "TLS_REQUIRED; SESSION STOP NOT CONFIRMED")
             // 3D.2U requires SSL; a plaintext session is closed via plaintext StopSession and never upgraded.
             report("EnableSessionSSL=false; TLS path not substituted")
         }
@@ -126,6 +146,7 @@ class ControlledStartSession(
     }
 
     private fun verifyCandidate(candidate: DiagnosticPairCandidate) {
+        if (requirePairedRecord && candidate.state != DiagnosticPairState.PAIRED) association("PAIRED_RECORD_REQUIRED")
         if (candidate.state !in setOf(DiagnosticPairState.PAIRED, DiagnosticPairState.VALIDATED)) association("PAIR_RECORD_PREPARED")
         val record = candidate.record ?: association("PAIR_RECORD_INVALID")
         if (candidate.hostId != record.hostId || candidate.systemBuid != record.systemBuid) association("PAIR_RECORD_INVALID")
@@ -143,5 +164,6 @@ class ControlledStartSession(
         private val SAFE_ERRORS = setOf("InvalidHostID", "InvalidPairRecord", "PasswordProtected", "SessionActive",
             "SessionInactive", "MissingHostID", "MissingValue", "InvalidArgument", "InvalidConnection",
             "PairingDialogResponsePending", "UserDeniedPairing")
+        private val SAFE_GET_VALUE_METADATA_FIELDS = setOf("Domain", "Key")
     }
 }

@@ -11,12 +11,14 @@ import com.shilapi.xcertplay.transport.LockdownPeerValidation
 import com.shilapi.xcertplay.transport.LockdownPlistChannel
 import com.shilapi.xcertplay.transport.LockdownPlistValue
 import com.shilapi.xcertplay.transport.LockdownTlsUpgrade
+import com.shilapi.xcertplay.transport.CarKitServiceTlsConnection
 import com.shilapi.xcertplay.transport.TlsDuplexChannel
 import com.shilapi.xcertplay.transport.Iap2UsbMuxTcpConnection
 import com.shilapi.xcertplay.transport.ReadOnlyLockdownQueries
 import com.shilapi.xcertplay.transport.UsbMuxBulkPipe
 import com.shilapi.xcertplay.transport.UsbMuxVersionPacket
 import java.util.Locale
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAccess {
@@ -31,7 +33,7 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
         private val connection: UsbDeviceConnection,
         private val target: UsbInterface,
         private val unchanged: () -> Unit,
-    ) : ReadOnlyLockdownConnection, ControlledPairConnection, StartSessionConnection, LockdownTlsUpgrade {
+    ) : ReadOnlyLockdownConnection, ControlledPairConnection, StartSessionConnection, LockdownTlsUpgrade, CarKitServiceTlsConnection {
         private var closed = false
         private var readAttempted = false
         private var active5 = false
@@ -42,12 +44,21 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
         private var releaseAttempted = false
         private var transportStopped = false
         private var mux: Iap2UsbMuxHost? = null
+        private val muxDiagnostics = ConcurrentLinkedQueue<String>()
+        @Volatile private var stopSessionInProgress = false
+        @Volatile private var stopSessionResponseReceived = false
         private var channel: LockdownPlistChannel? = null
         private var queries: ReadOnlyLockdownQueries? = null
         private var pipe: Pipe? = null
         private var queryConfirmed = false
         private var pairAttempted = false
         private var tcp: Iap2UsbMuxTcpConnection? = null
+        private var serviceTcp: Iap2UsbMuxTcpConnection? = null
+        private var serviceTls: TlsDuplexChannel? = null
+        private var authorizedServicePort: Int? = null
+        private var serviceConnectAttempted = false
+        private var lockdownTlsClose = "NOT_OPEN"
+        private var lockdownTcpClose = "NOT_OPEN"
         private var sessionRequests = 0
         private var sessionStopRequests = 0
         private var sessionIdentityRequests = 0
@@ -56,6 +67,7 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
         private var tlsAttempted = false
         private var tlsChannel: LockdownPlistChannel? = null
         private var tlsQueryRequests = 0
+        private var tlsStartServiceRequests = 0
         private var tlsStopRequests = 0
         override fun configuration(report: (String) -> Unit): Int {
             check(!closed && !readAttempted) { "One pre-claim configuration read only" }
@@ -74,7 +86,11 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
             unchanged()
             val opened = Pipe(connection, target, unchanged, report)
             pipe = opened
-            mux = Iap2UsbMuxHost.openReadOnlyDiagnostic(opened)
+            mux = Iap2UsbMuxHost.openReadOnlyDiagnostic(
+                opened,
+                onDiagnostic = muxDiagnostics::add,
+                diagnosticStage = ::lockdownStopSessionStage,
+            )
         }
         override fun connectLockdown() {
             check(!closed && !releaseAttempted && !connectAttempted) { "One TCP connect only" }
@@ -157,26 +173,105 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
             val tls = TlsDuplexChannel.open(stream, record, 5_000, peerReport)
             checkNotNull(mux).verifyReadOnlyDiagnostic()
             tlsChannel = LockdownPlistChannel(tls, maximumMessageBytes = 64 * 1024, defaultTimeoutMillis = 5_000)
+            lockdownTlsClose = "OPEN"
         }
 
         override fun tlsSessionRequest(message: LockdownPlistValue.Dictionary): LockdownPlistValue.Dictionary {
             check(!closed && !releaseAttempted && tlsAttempted)
             val opened = checkNotNull(tlsChannel) { "TLS not established" }
             val entries = message.entries
-            when ((entries["Request"] as? LockdownPlistValue.Text)?.value) {
+            val operation = (entries["Request"] as? LockdownPlistValue.Text)?.value
+                ?: error("TLS Request must be text")
+            when (operation) {
                 "QueryType" -> {
-                    check(tlsQueryRequests++ == 0 && tlsStopRequests == 0)
+                    check(tlsQueryRequests++ == 0 && tlsStartServiceRequests == 0 && tlsStopRequests == 0)
                     check(entries.keys == setOf("Label", "Request"))
+                }
+                "StartService" -> {
+                    check(tlsStartServiceRequests++ == 0 && tlsQueryRequests == 0 && tlsStopRequests == 0)
+                    check(entries.keys == setOf("Label", "Request", "Service"))
+                    check((entries["Service"] as? LockdownPlistValue.Text)?.value ==
+                        com.shilapi.xcertplay.transport.ControlledLockdownTlsSession.CARKIT_SERVICE)
                 }
                 "StopSession" -> {
                     check(tlsStopRequests++ == 0)
+                    check(tlsQueryRequests + tlsStartServiceRequests == 1)
                     check(entries.keys == setOf("Label", "Request", "SessionID"))
                     check((entries["SessionID"] as? LockdownPlistValue.Text)?.value == checkNotNull(tlsSessionId))
                 }
                 else -> error("TLS request boundary violation")
             }
             unchanged()
-            return opened.request(message, 5_000).also { checkNotNull(mux).verifyReadOnlyDiagnostic() }
+            val stoppingSession = operation == "StopSession"
+            if (stoppingSession) {
+                stopSessionResponseReceived = false
+                stopSessionInProgress = true
+            }
+            val reply = try {
+                opened.request(message, 5_000).also {
+                    if (stoppingSession) stopSessionResponseReceived = true
+                }
+            } finally {
+                if (stoppingSession) stopSessionInProgress = false
+            }
+            val host = checkNotNull(mux)
+            host.verifyReadOnlyDiagnostic()
+            if (operation == "StartService" && isValidCarKitServiceReply(reply)) {
+                val port = (reply.entries["Port"] as LockdownPlistValue.Integer).value.toInt()
+                host.authorizeDiagnosticServicePort(port)
+                authorizedServicePort = port
+            }
+            return reply
+        }
+
+        override fun connectTcp(port: Int) {
+            check(!closed && !releaseAttempted && tlsAttempted && tlsChannel != null && tlsStopRequests == 0)
+            check(tlsStartServiceRequests == 1 && !serviceConnectAttempted && authorizedServicePort == port)
+            serviceConnectAttempted = true
+            unchanged()
+            serviceTcp = checkNotNull(mux).connect(port, 5_000)
+            checkNotNull(mux).verifyReadOnlyDiagnostic()
+        }
+
+        override fun startTls(record: LockdownPairRecord, peerReport: (LockdownPeerValidation) -> Unit) {
+            check(!closed && !releaseAttempted && serviceConnectAttempted && serviceTls == null)
+            check(authorizedServicePort != null && tlsStopRequests == 0)
+            unchanged()
+            serviceTls = TlsDuplexChannel.open(checkNotNull(serviceTcp), record, 5_000, peerReport)
+            checkNotNull(mux).verifyReadOnlyDiagnostic()
+        }
+
+        override fun closeTls(): Boolean {
+            val opened = serviceTls ?: return true
+            serviceTls = null
+            opened.close()
+            return true
+        }
+
+        override fun closeTcp(): Boolean {
+            val opened = serviceTcp ?: return true
+            serviceTcp = null
+            opened.close()
+            return !opened.diagnosticState().contains("TCP_OPEN=true")
+        }
+
+        private fun isValidCarKitServiceReply(reply: LockdownPlistValue.Dictionary): Boolean {
+            val entries = reply.entries
+            if ((entries["Request"] as? LockdownPlistValue.Text)?.value != "StartService" ||
+                entries.containsKey("Error") ||
+                (entries["Result"] != null && (entries["Result"] as? LockdownPlistValue.Text)?.value != "Success") ||
+                (entries["Service"] as? LockdownPlistValue.Text)?.value !=
+                com.shilapi.xcertplay.transport.ControlledLockdownTlsSession.CARKIT_SERVICE ||
+                (entries["EnableServiceSSL"] as? LockdownPlistValue.Boolean)?.value != true ||
+                entries.keys.any { it !in setOf("Request", "Result", "Service", "Port", "EnableServiceSSL") }) return false
+            val port = (entries["Port"] as? LockdownPlistValue.Integer)?.value ?: return false
+            return port in 1..65535 && port != Iap2UsbMuxHost.LOCKDOWN_PORT.toLong()
+        }
+
+        private fun lockdownStopSessionStage(): String = when {
+            stopSessionInProgress -> "DURING_STOPSESSION"
+            stopSessionResponseReceived -> "AFTER_STOPSESSION_RESPONSE"
+            else -> "BEFORE_STOPSESSION"
         }
 
         override fun sessionTransportState() = transportState()
@@ -189,11 +284,16 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
             pairOperation(store, checkActive, report, true)
         }
 
-        override fun transportState(): String =
-            "USB_HANDLE_OPEN=${!closed} (local ownership; not physical-handle liveness); " +
+        override fun transportState(): String {
+            val muxEvidence = generateSequence { muxDiagnostics.poll() }.joinToString("\n")
+            return "USB_HANDLE_OPEN=${!closed} (local ownership; not physical-handle liveness); " +
                 (mux?.diagnosticState() ?: "USBMUX_HOST_ACTIVE=false (not initialized)") + "; " +
-                (tcp?.diagnosticState() ?: "TCP_OPEN=false (not connected)") + "; " +
-                (pipe?.diagnosticState() ?: "USB_SHORT_WRITE=false; USB_FAILED_WRITE=false")
+                "LOCKDOWN_TLS_CLOSE=$lockdownTlsClose; LOCKDOWN_TCP_CLOSE=$lockdownTcpClose; " +
+                "LOCKDOWN_${tcp?.diagnosticState() ?: "TCP_OPEN=false (not connected)"}; " +
+                "SERVICE_${serviceTcp?.diagnosticState() ?: "TCP_OPEN=false (not connected)"}; " +
+                (pipe?.diagnosticState() ?: "USB_SHORT_WRITE=false; USB_FAILED_WRITE=false") +
+                if (muxEvidence.isEmpty()) "" else "\n$muxEvidence"
+        }
 
         private fun pairOperation(store: DiagnosticPairStore, checkActive: () -> Unit, report: (String) -> Unit,
             existingOnly: Boolean) {
@@ -228,8 +328,22 @@ class AndroidReadOnlyLockdownAccess(manager: UsbManager) : ReadOnlyLockdownAcces
                 }
             }
             close { mux?.verifyReadOnlyDiagnostic() }
-            close { tlsChannel?.close() }
-            close { channel?.close() }
+            close { serviceTls?.close(); serviceTls = null }
+            close { serviceTcp?.close(); serviceTcp = null }
+            close {
+                val opened = tlsChannel
+                opened?.close()
+                lockdownTlsClose = if (opened == null) "NOT_OPEN" else "PASS"
+                tlsChannel = null
+            }
+            close { channel?.close(); channel = null }
+            close {
+                val opened = tcp
+                opened?.close()
+                lockdownTcpClose = if (opened == null) "NOT_OPEN"
+                    else if (opened.diagnosticState().contains("TCP_OPEN=true")) "FAIL" else "PASS"
+                tcp = null
+            }
             close { mux?.close() }
             close { pipe?.close() }
             failure?.let { throw it }

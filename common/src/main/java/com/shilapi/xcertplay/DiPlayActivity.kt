@@ -193,6 +193,12 @@ class DiPlayActivity : ComponentActivity() {
     private var modernLockdownTlsReport = ModernStartSessionDiagnostic.TLS_NOT_RUN
     private var modernLockdownTlsText: TextView? = null
     private var modernLockdownTlsButton: Button? = null
+    private var carKitDiscoveryReport = ModernStartSessionDiagnostic.SERVICE_NOT_RUN
+    private var carKitDiscoveryText: TextView? = null
+    private var carKitDiscoveryButton: Button? = null
+    private var carKitServiceConnectionReport = ModernStartSessionDiagnostic.CONNECTION_NOT_RUN
+    private var carKitServiceConnectionText: TextView? = null
+    private var carKitServiceConnectionButton: Button? = null
     private var directUsbMuxAccess: com.shilapi.xcertplay.transport.DirectUsbMuxAccess? = null
     private var directUsbMuxDiagnostic: com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic? = null
     private var directUsbMuxReport = com.shilapi.xcertplay.transport.DirectUsbMuxDiagnostic.NOT_RUN
@@ -1154,6 +1160,24 @@ class DiPlayActivity : ComponentActivity() {
                 }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
                 card.addView(modernLockdownTlsButton, matchButton())
             }
+            section(content, getString(R.string.phase3d2v_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(ModernStartSessionDiagnostic.SERVICE_SAFETY, 18, WARNING))
+                carKitDiscoveryText = label(carKitDiscoveryReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(carKitDiscoveryText)
+                carKitDiscoveryButton = button(getString(R.string.phase3d2v_test), false) {
+                    confirmCarKitServiceDiscovery()
+                }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
+                card.addView(carKitDiscoveryButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2w_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(ModernStartSessionDiagnostic.CONNECTION_SAFETY, 18, WARNING))
+                carKitServiceConnectionText = label(carKitServiceConnectionReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(carKitServiceConnectionText)
+                carKitServiceConnectionButton = button(getString(R.string.phase3d2w_test), false) {
+                    confirmCarKitServiceConnection()
+                }.apply { setTextColor(WARNING); isEnabled = !controlledPairRunning }
+                card.addView(carKitServiceConnectionButton, matchButton())
+            }
             section(content, getString(R.string.phase3d2p2_local_title), R.drawable.ic_dp_diagnostics) { card ->
                 card.addView(label(LocalPairMetadataDiagnostic.SAFETY, 18, WARNING))
                 localPairMetadataText = label(localPairMetadataReport, 14, MUTED).apply { setTextIsSelectable(true) }
@@ -1598,15 +1622,30 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun confirmControlledPairDiagnostic() = confirmPairDiagnostic(false)
 
-    private fun confirmModernStartSession(tls: Boolean = false) {
-        val notRun = if (tls) ModernStartSessionDiagnostic.TLS_NOT_RUN else ModernStartSessionDiagnostic.NOT_RUN
+    private fun confirmModernStartSession(tls: Boolean = false) = confirmStartSessionDiagnostic(tls, false, false)
+
+    private fun confirmCarKitServiceDiscovery() = confirmStartSessionDiagnostic(false, true, false)
+
+    private fun confirmCarKitServiceConnection() = confirmStartSessionDiagnostic(false, false, true)
+
+    private fun confirmStartSessionDiagnostic(tls: Boolean, serviceDiscovery: Boolean, serviceConnection: Boolean) {
+        val notRun = when {
+            serviceConnection -> ModernStartSessionDiagnostic.CONNECTION_NOT_RUN
+            serviceDiscovery -> ModernStartSessionDiagnostic.SERVICE_NOT_RUN
+            tls -> ModernStartSessionDiagnostic.TLS_NOT_RUN
+            else -> ModernStartSessionDiagnostic.NOT_RUN
+        }
         fun publish(text: String) {
-            if (tls) { modernLockdownTlsReport = text; modernLockdownTlsText?.text = text }
+            if (serviceConnection) { carKitServiceConnectionReport = text; carKitServiceConnectionText?.text = text }
+            else if (serviceDiscovery) { carKitDiscoveryReport = text; carKitDiscoveryText?.text = text }
+            else if (tls) { modernLockdownTlsReport = text; modernLockdownTlsText?.text = text }
             else { modernStartSessionReport = text; modernStartSessionText?.text = text }
         }
         fun enableButtons(enabled: Boolean) {
             modernStartSessionButton?.isEnabled = enabled
             modernLockdownTlsButton?.isEnabled = enabled
+            carKitDiscoveryButton?.isEnabled = enabled
+            carKitServiceConnectionButton?.isEnabled = enabled
             controlledPairButton?.isEnabled = enabled
             existingPairButton?.isEnabled = enabled
         }
@@ -1615,10 +1654,25 @@ class DiPlayActivity : ComponentActivity() {
             return
         }
         AlertDialog.Builder(this)
-            .setTitle(if (tls) R.string.phase3d2u_title else R.string.phase3d2s_title)
-            .setMessage(if (tls) R.string.phase3d2u_confirm else R.string.phase3d2s_confirm)
+            .setTitle(when {
+                serviceConnection -> R.string.phase3d2w_title
+                serviceDiscovery -> R.string.phase3d2v_title
+                tls -> R.string.phase3d2u_title
+                else -> R.string.phase3d2s_title
+            })
+            .setMessage(when {
+                serviceConnection -> R.string.phase3d2w_confirm
+                serviceDiscovery -> R.string.phase3d2v_confirm
+                tls -> R.string.phase3d2u_confirm
+                else -> R.string.phase3d2s_confirm
+            })
             .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton(if (tls) R.string.phase3d2u_test else R.string.phase3d2s_test) { _, _ ->
+            .setPositiveButton(when {
+                serviceConnection -> R.string.phase3d2w_test
+                serviceDiscovery -> R.string.phase3d2v_test
+                tls -> R.string.phase3d2u_test
+                else -> R.string.phase3d2s_test
+            }) { _, _ ->
                 if (localPairMetadataRunning || controlledPairRunning || controlledPairDiagnosticsBusy()) {
                     toast(getString(R.string.phase3d2o_busy))
                     return@setPositiveButton
@@ -1639,7 +1693,8 @@ class DiPlayActivity : ComponentActivity() {
                         override fun acceptedRecords() = store.acceptedRecords()
                         override fun load(deviceId: String) = store.load(deviceId)
                     }
-                    ModernStartSessionDiagnostic(access, records, tlsRoundTrip = tls)
+                    ModernStartSessionDiagnostic(access, records, tlsRoundTrip = tls, serviceDiscovery = serviceDiscovery,
+                        serviceConnection = serviceConnection)
                 } catch (error: Exception) {
                     publish("${notRun}\nInitialization failed=${error.javaClass.simpleName}; STOP")
                     return@setPositiveButton
@@ -1660,7 +1715,12 @@ class DiPlayActivity : ComponentActivity() {
                 modernStartSessionDiagnostic = diagnostic
                 controlledPairRunning = true
                 enableButtons(false)
-                publish(getString(if (tls) R.string.phase3d2u_running else R.string.phase3d2s_running))
+                publish(getString(when {
+                    serviceConnection -> R.string.phase3d2w_running
+                    serviceDiscovery -> R.string.phase3d2v_running
+                    tls -> R.string.phase3d2u_running
+                    else -> R.string.phase3d2s_running
+                }))
                 Thread({
                     var report = diagnostic.run()
                     try { observer.close() }
@@ -1677,9 +1737,16 @@ class DiPlayActivity : ComponentActivity() {
                         if (!isFinishing && !isDestroyed) {
                             publish(report)
                             enableButtons(true)
-                        } else if (tls) modernLockdownTlsReport = report else modernStartSessionReport = report
+                        } else if (serviceConnection) carKitServiceConnectionReport = report
+                        else if (serviceDiscovery) carKitDiscoveryReport = report
+                        else if (tls) modernLockdownTlsReport = report else modernStartSessionReport = report
                     }
-                }, if (tls) "diplay-modern-lockdown-tls" else "diplay-modern-startsession").start()
+                }, when {
+                    serviceConnection -> "diplay-carkit-service-tls"
+                    serviceDiscovery -> "diplay-carkit-startservice-discovery"
+                    tls -> "diplay-modern-lockdown-tls"
+                    else -> "diplay-modern-startsession"
+                }).start()
             }.show()
     }
 
@@ -4182,6 +4249,8 @@ class DiPlayActivity : ComponentActivity() {
         val localPairMetadataDiagnostics = localPairMetadataReport
         val modernStartSessionDiagnostics = modernStartSessionReport
         val modernLockdownTlsDiagnostics = modernLockdownTlsReport
+        val carKitDiscoveryDiagnostics = carKitDiscoveryReport
+        val carKitServiceConnectionDiagnostics = carKitServiceConnectionReport
         Thread({
             val result = runCatching {
                 val report = buildString {
@@ -4229,6 +4298,8 @@ class DiPlayActivity : ComponentActivity() {
                         appendLine(localPairMetadataDiagnostics)
                         appendLine(modernStartSessionDiagnostics)
                         appendLine(modernLockdownTlsDiagnostics)
+                        appendLine(carKitDiscoveryDiagnostics)
+                        appendLine(carKitServiceConnectionDiagnostics)
                         return@buildString
                     }
                     appendLine("DiPlay ${version()} · private beta diagnostic report")
@@ -4320,6 +4391,8 @@ class DiPlayActivity : ComponentActivity() {
                     appendLine(existingPairDiagnostics)
                     appendLine(modernStartSessionDiagnostics)
                     appendLine(modernLockdownTlsDiagnostics)
+                        appendLine(carKitDiscoveryDiagnostics)
+                        appendLine(carKitServiceConnectionDiagnostics)
                 }
                 val savedReport = if (uri != null) {
                     DiagnosticExportStore.write(appContext.contentResolver, uri, report)

@@ -116,4 +116,93 @@ class ModernStartSessionUiTest {
             assertTrue(report.contains("StartSession attempts=0"))
         } finally { controller.pause().stop().destroy() }
     }
+
+    @Test fun carKitServiceDiscoveryIsManualAndMissingPairedRecordStopsBeforeUsb() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        var inventoryReads = 0
+        ReflectionHelpers.setField(activity, "controlledPairStore", object : DiagnosticPairStore {
+            override fun acceptedRecords(): List<DiagnosticPairCandidate> { inventoryReads++; return emptyList() }
+            override fun load(deviceId: String): DiagnosticPairCandidate? = error("No record")
+            override fun systemBuid(): String = error("No identity generation")
+            override fun save(candidate: DiagnosticPairCandidate): Unit = error("No writes")
+        })
+        ReflectionHelpers.setField(activity, "controlledPairAccess", object : ReadOnlyLockdownAccess {
+            override fun devices(): List<PassiveUsbDevice> = error("Preflight must stop before USB")
+            override fun open(device: PassiveUsbDevice): ReadOnlyLockdownConnection = error("No USB")
+        })
+        ReflectionHelpers.setField(activity, "controlledPairObserver",
+            { _: android.content.Context, _: (QDriveUsbEvent) -> Unit -> java.io.Closeable {} })
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "launchTestSettings",
+                ReflectionHelpers.ClassParameter.from(LinearLayout::class.java, LinearLayout(activity)))
+            assertEquals(0, inventoryReads)
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "confirmCarKitServiceDiscovery")
+            var dialog = ShadowAlertDialog.getLatestAlertDialog()
+            assertTrue(shadowOf(dialog).message.toString().contains("PAIRED record"))
+            assertTrue(shadowOf(dialog).message.toString().contains("NEVER contacted"))
+            assertEquals(0, inventoryReads)
+            dialog.getButton(DialogInterface.BUTTON_NEGATIVE).performClick()
+            assertEquals(0, inventoryReads)
+
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "confirmCarKitServiceDiscovery")
+            dialog = ShadowAlertDialog.getLatestAlertDialog()
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (ReflectionHelpers.getField<Boolean>(activity, "controlledPairRunning") && System.nanoTime() < deadline) {
+                Thread.sleep(20)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            assertFalse(ReflectionHelpers.getField<Boolean>(activity, "controlledPairRunning"))
+            assertEquals(1, inventoryReads)
+            val report = ReflectionHelpers.getField<String>(activity, "carKitDiscoveryReport")
+            assertTrue(report.contains("PAIR_RECORD_NOT_FOUND"))
+            assertTrue(report.contains("StartService=0"))
+        } finally { controller.pause().stop().destroy() }
+    }
+
+    @Test fun carKitServiceTlsIsManualAndMissingPairedRecordStopsBeforeUsb() {
+        val controller = Robolectric.buildActivity(DiPlayActivity::class.java).setup()
+        val activity = controller.get()
+        var inventoryReads = 0
+        ReflectionHelpers.setField(activity, "controlledPairStore", object : DiagnosticPairStore {
+            override fun acceptedRecords(): List<DiagnosticPairCandidate> { inventoryReads++; return emptyList() }
+            override fun load(deviceId: String): DiagnosticPairCandidate? = error("No record")
+            override fun systemBuid(): String = error("No identity generation")
+            override fun save(candidate: DiagnosticPairCandidate): Unit = error("No writes")
+        })
+        ReflectionHelpers.setField(activity, "controlledPairAccess", object : ReadOnlyLockdownAccess {
+            override fun devices(): List<PassiveUsbDevice> = error("Preflight must stop before USB")
+            override fun open(device: PassiveUsbDevice): ReadOnlyLockdownConnection = error("No USB")
+        })
+        ReflectionHelpers.setField(activity, "controlledPairObserver",
+            { _: android.content.Context, _: (QDriveUsbEvent) -> Unit -> java.io.Closeable {} })
+        try {
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "launchTestSettings",
+                ReflectionHelpers.ClassParameter.from(LinearLayout::class.java, LinearLayout(activity)))
+            assertEquals(0, inventoryReads)
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "confirmCarKitServiceConnection")
+            var dialog = ShadowAlertDialog.getLatestAlertDialog()
+            assertTrue(shadowOf(dialog).message.toString().contains("NO CARKIT APPLICATION TRAFFIC"))
+            assertEquals(0, inventoryReads)
+            dialog.getButton(DialogInterface.BUTTON_NEGATIVE).performClick()
+            assertEquals(0, inventoryReads)
+
+            ReflectionHelpers.callInstanceMethod<Unit>(activity, "confirmCarKitServiceConnection")
+            dialog = ShadowAlertDialog.getLatestAlertDialog()
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).performClick()
+            shadowOf(Looper.getMainLooper()).idle()
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (ReflectionHelpers.getField<Boolean>(activity, "controlledPairRunning") && System.nanoTime() < deadline) {
+                Thread.sleep(20)
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            assertFalse(ReflectionHelpers.getField<Boolean>(activity, "controlledPairRunning"))
+            assertEquals(1, inventoryReads)
+            val report = ReflectionHelpers.getField<String>(activity, "carKitServiceConnectionReport")
+            assertTrue(report.contains("PAIR_RECORD_NOT_FOUND"))
+            assertTrue(report.contains("ServiceTCP=0 ServiceTLS=0"))
+        } finally { controller.pause().stop().destroy() }
+    }
 }

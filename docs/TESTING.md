@@ -1,5 +1,19 @@
 # Test checklist
 
+## Phase 3D.2W - CarKit service TCP/TLS handshake only
+
+See [the one-run 3D.2W hardware procedure](PHASE3D2W_CARKIT_SERVICE_TCP_TLS.md).
+Focused coverage validates simultaneous USBMUX sockets, independent routing/close, the
+authenticated service TLS path, and cleanup before Lockdown StopSession. No CarKit application
+traffic is sent. Hardware confirmed service TLS, certificate validation, encrypted StopSession, and cleanup. A retired-Lockdown RST-with-payload diagnostic was logged after StopSession response while the host was already closed; see the runbook for its timing analysis. No further hardware run is required for that report. Debug version: `0.2.12-api22-phase3d2w-retired-rst-payload-fix`; minSdk22; production connections remain disabled.
+
+## Phase 3D.2V - controlled CarKit StartService discovery
+
+See [implementation and single-run hardware procedure](PHASE3D2V_CARKIT_STARTSERVICE_DISCOVERY.md).
+Focused unit tests cover success, service error/unavailable, malformed and missing response
+fields, paired-record/TLS gates, StopSession outcomes, and cleanup. No hardware test is run
+during implementation. The debug build remains minSdk22 and connections stay disabled.
+
 ## Phase 3D.2T.1 - Lockdown TLS peer validation + StopSession (3D.2U manual)
 
 See [TLS validation and cleanup](PHASE3D2T1_TLS_VALIDATION_CLEANUP.md). The trust-all

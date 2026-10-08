@@ -16,6 +16,7 @@ class Iap2UsbMuxHost private constructor(
     private val readTimeoutMillis: Long,
     private val onDiagnostic: (String) -> Unit,
     private val handshakeTimeoutMillis: Long,
+    private val diagnosticStage: () -> String = { "NOT_APPLICABLE" },
 ) : Closeable {
     private var strictDiagnostic = false
     private val stateLock = Any()
@@ -26,10 +27,17 @@ class Iap2UsbMuxHost private constructor(
     private var nextMuxSequence = 0
     private var nextMuxAcknowledgement = 0
     private var nextSourcePort = FIRST_SOURCE_PORT
+    @Volatile private var diagnosticServicePort: Int? = null
+    private var diagnosticServiceConnectAttempted = false
+    private var closingSocketAckFrames = 0
+    private var closingSocketFinFrames = 0
+    private var closingSocketRstFrames = 0
+    private var closingSocketRstPayloadFrames = 0
+    private var closingSocketRstPayloadBytes = 0
     private lateinit var readerThread: Thread
     private val receiveFrames = UsbMuxFrameBuffer { line ->
         Log.w("xcertplay-usb", line)
-        runCatching { onDiagnostic(line) }
+        emitDiagnostic(line)
     }
 
     /** Opens a TCP byte stream to the iPhone service on [destinationPort]. */
@@ -42,6 +50,18 @@ class Iap2UsbMuxHost private constructor(
 
         val connection = synchronized(stateLock) {
             checkOpenLocked()
+            if (strictDiagnostic) {
+                if (destinationPort == LOCKDOWN_PORT) {
+                    check(connections.values.none { it.destinationPort == LOCKDOWN_PORT }) {
+                        "Only one Lockdown TCP connection is permitted"
+                    }
+                } else {
+                    check(destinationPort == diagnosticServicePort && !diagnosticServiceConnectAttempted) {
+                        "Only the authorized one-shot diagnostic service port is permitted"
+                    }
+                    diagnosticServiceConnectAttempted = true
+                }
+            }
             val sourcePort = allocateSourcePortLocked()
             Iap2UsbMuxTcpConnection(this, sourcePort, destinationPort).also {
                 connections[sourcePort] = it
@@ -58,6 +78,22 @@ class Iap2UsbMuxHost private constructor(
             removeConnection(connection)
             throw error
         }
+    }
+
+    /** Grants one additional strict-diagnostic connection after its Lockdown StartService response. */
+    fun authorizeDiagnosticServicePort(destinationPort: Int) = synchronized(stateLock) {
+        check(strictDiagnostic) { "Service-port authorization is diagnostic-only" }
+        checkOpenLocked()
+        require(destinationPort in 1..0xffff && destinationPort != LOCKDOWN_PORT) {
+            "Invalid diagnostic service port"
+        }
+        check(diagnosticServicePort == null && !diagnosticServiceConnectAttempted) {
+            "Only one service port can be authorized"
+        }
+        check(connections.values.any { it.destinationPort == LOCKDOWN_PORT }) {
+            "An active Lockdown connection is required before service authorization"
+        }
+        diagnosticServicePort = destinationPort
     }
 
     override fun close() {
@@ -85,7 +121,9 @@ class Iap2UsbMuxHost private constructor(
         flags: Int,
         payload: ByteArray,
     ) {
-        if (payload.size > 512) Log.i("xcertplay-usb", "usbmux TX source=$sourcePort destination=$destinationPort bytes=${payload.size} seq=$sequence ack=$acknowledgement")
+        if (payload.size > 512) {
+            Log.i("xcertplay-usb", "usbmux TCP TX bytes=${payload.size}; flags=${classifyTcpFlags(flags, payload.size)}; payload=REDACTED")
+        }
         val tcp = ByteArray(TCP_HEADER_BYTES + payload.size)
         putU16(tcp, 0, sourcePort)
         putU16(tcp, 2, destinationPort)
@@ -101,9 +139,31 @@ class Iap2UsbMuxHost private constructor(
     internal fun removeConnection(connection: Iap2UsbMuxTcpConnection) {
         synchronized(stateLock) {
             if (connections[connection.sourcePort] === connection) {
+                if (strictDiagnostic && connection.isClosedForHost()) return
                 connections.remove(connection.sourcePort)
             }
         }
+    }
+
+    internal fun isStrictDiagnostic(): Boolean = synchronized(stateLock) { strictDiagnostic && !closed }
+
+    internal fun recordClosingSocketFrame(flags: Int) = synchronized(stateLock) {
+        when (flags) {
+            Iap2UsbMuxTcpConnection.TCP_ACK -> closingSocketAckFrames++
+            Iap2UsbMuxTcpConnection.TCP_FIN, Iap2UsbMuxTcpConnection.TCP_FIN or Iap2UsbMuxTcpConnection.TCP_ACK ->
+                closingSocketFinFrames++
+            Iap2UsbMuxTcpConnection.TCP_RST, Iap2UsbMuxTcpConnection.TCP_RST or Iap2UsbMuxTcpConnection.TCP_ACK ->
+                closingSocketRstFrames++
+        }
+    }
+
+    internal fun isRetiredServiceConnection(connection: Iap2UsbMuxTcpConnection): Boolean = synchronized(stateLock) {
+        strictDiagnostic && !closed && diagnosticServicePort == connection.destinationPort && connection.isClosedForHost()
+    }
+
+    internal fun recordClosingSocketRstPayload(payloadLength: Int) = synchronized(stateLock) {
+        closingSocketRstPayloadFrames++
+        closingSocketRstPayloadBytes += payloadLength
     }
 
     internal fun requiresStrictCleanup(): Boolean = strictDiagnostic
@@ -114,7 +174,103 @@ class Iap2UsbMuxHost private constructor(
     }
 
     fun diagnosticState(): String = synchronized(stateLock) {
-        "USBMUX_HOST_ACTIVE=${!closed && failure == null}; hostFailure=${failure?.javaClass?.simpleName ?: "none"}"
+        "USBMUX_HOST_ACTIVE=${!closed && failure == null}; hostFailure=${failure?.javaClass?.simpleName ?: "none"}; " +
+            "closingSocketACK=$closingSocketAckFrames; closingSocketFIN=$closingSocketFinFrames; " +
+            "closingSocketRST=$closingSocketRstFrames; closingSocketRSTPayloadFrames=$closingSocketRstPayloadFrames; " +
+            "closingSocketRSTPayloadBytes=$closingSocketRstPayloadBytes"
+    }
+
+    internal fun closedSocketProtocolFailure(
+        connection: Iap2UsbMuxTcpConnection,
+        reasonCode: String,
+        flags: Int,
+        sequence: Int,
+        acknowledgement: Int,
+        payloadLength: Int,
+    ): Nothing {
+        reportProtocolFailure(reasonCode, socketRole(connection), classifyTcpFlags(flags, payloadLength), payloadLength,
+            true, true, connection.sequenceIsExpected(sequence), connection.acknowledgementIsInRange(acknowledgement))
+        throw IphoneUsbException.Protocol("$PROTOCOL_DIAGNOSTIC_PREFIX$reasonCode")
+    }
+
+    private fun protocolFailure(
+        reasonCode: String,
+        socketRole: String,
+        tcpFlags: String,
+        payloadLength: Int?,
+        localSocketMatched: Boolean,
+        remotePortMatched: Boolean,
+        sequenceExpected: Boolean,
+        acknowledgementInRange: Boolean,
+    ): Nothing {
+        reportProtocolFailure(reasonCode, socketRole, tcpFlags, payloadLength, localSocketMatched,
+            remotePortMatched, sequenceExpected, acknowledgementInRange)
+        throw IphoneUsbException.Protocol("$PROTOCOL_DIAGNOSTIC_PREFIX$reasonCode")
+    }
+
+    private fun reportProtocolFailure(
+        reasonCode: String,
+        socketRole: String,
+        tcpFlags: String,
+        payloadLength: Int?,
+        localSocketMatched: Boolean,
+        remotePortMatched: Boolean,
+        sequenceExpected: Boolean,
+        acknowledgementInRange: Boolean,
+    ) {
+        val host = synchronized(stateLock) {
+            "hostState=${if (closed) "CLOSED" else if (failure == null) "ACTIVE" else "FAILED"}; " +
+                "hostFailure=${failure?.javaClass?.simpleName ?: "NONE"}; mappedSockets=${connections.size}; " +
+                "closingSocketACK=$closingSocketAckFrames; closingSocketFIN=$closingSocketFinFrames; " +
+                "closingSocketRST=$closingSocketRstFrames; closingSocketRSTPayloadFrames=$closingSocketRstPayloadFrames; " +
+                "closingSocketRSTPayloadBytes=$closingSocketRstPayloadBytes"
+        }
+        val stage = runCatching(diagnosticStage).getOrDefault("UNKNOWN")
+        emitDiagnostic("USBMUX_PROTOCOL_FAILURE reason=$reasonCode; socketRole=$socketRole; tcpFlags=$tcpFlags; " +
+            "payloadLength=${payloadLength?.toString() ?: "UNKNOWN"}; localSocketMatched=$localSocketMatched; " +
+            "remotePortMatched=$remotePortMatched; tcpSequenceExpectedMatch=$sequenceExpected; " +
+            "tcpAcknowledgementWithinSentRange=$acknowledgementInRange; stopSessionStage=$stage; $host")
+    }
+
+    private fun socketRole(connection: Iap2UsbMuxTcpConnection?): String = when {
+        connection == null -> "UNKNOWN"
+        connection.destinationPort == LOCKDOWN_PORT -> if (connection.isClosedForHost()) "RETIRED_LOCKDOWN" else "LOCKDOWN"
+        connection.destinationPort == diagnosticServicePort -> if (connection.isClosedForHost()) "RETIRED_SERVICE" else "SERVICE"
+        else -> "UNKNOWN"
+    }
+
+    private fun classifyTcpFlags(flags: Int, payloadLength: Int?): String {
+        val names = buildList {
+            if (flags and Iap2UsbMuxTcpConnection.TCP_SYN != 0) add("SYN")
+            if (flags and Iap2UsbMuxTcpConnection.TCP_ACK != 0) add("ACK")
+            if (flags and Iap2UsbMuxTcpConnection.TCP_FIN != 0) add("FIN")
+            if (flags and Iap2UsbMuxTcpConnection.TCP_RST != 0) add("RST")
+            if (flags and TCP_PSH != 0) add("PSH")
+            if (flags and TCP_URG != 0) add("URG")
+            if (flags and TCP_KNOWN_FLAGS.inv() != 0) add("OTHER")
+            if (payloadLength != null && payloadLength > 0) add("PAYLOAD")
+        }
+        return names.ifEmpty { listOf(if (payloadLength == null) "UNKNOWN" else "NONE") }.joinToString("|")
+    }
+
+    private fun protocolReason(message: String?): String = when {
+        message?.startsWith("Invalid USBMUX frame length") == true -> "MUX_FRAME_LENGTH_INVALID"
+        message?.startsWith("USBMUX TCP frame is shorter") == true -> "TCP_HEADER_TOO_SHORT"
+        message?.startsWith("Invalid USBMUX TCP header length") == true -> "TCP_HEADER_LENGTH_INVALID"
+        message?.startsWith("Unexpected USBMUX protocol") == true -> "UNEXPECTED_USBMUX_PROTOCOL"
+        message?.startsWith("Unexpected TCP connection destination") == true -> "UNKNOWN_TCP_DESTINATION"
+        message?.startsWith("USBMUX TCP peer port did not match") == true -> "TCP_REMOTE_PORT_MISMATCH"
+        message?.startsWith("TCP payload received after") == true -> "CLOSED_SOCKET_PAYLOAD"
+        message?.startsWith("Invalid TCP control flags") == true -> "CLOSED_SOCKET_FLAGS_INVALID"
+        message?.startsWith("Empty USBMUX completion") == true -> "USB_PIPE_EMPTY_COMPLETION"
+        message?.startsWith("Version response length") == true -> "MUX_VERSION_REPLY_LENGTH_INVALID"
+        message?.startsWith("Invalid version fields") == true -> "MUX_VERSION_REPLY_FIELDS_INVALID"
+        message?.startsWith("Invalid USBMUX version reply") == true -> "MUX_VERSION_REPLY_INVALID"
+        else -> "USBMUX_PROTOCOL_FAILURE_UNCLASSIFIED"
+    }
+
+    private fun emitDiagnostic(line: String) {
+        runCatching { onDiagnostic(line) }
     }
 
     private fun begin() {
@@ -223,8 +379,25 @@ class Iap2UsbMuxHost private constructor(
         try {
             pipe.write(frame, WRITE_TIMEOUT_MILLIS)
         } catch (error: IphoneUsbException) {
-            fail(error)
-            throw error
+            val failure = if (error is IphoneUsbException.Protocol) {
+                val tcp = payload.takeIf { protocol == PROTOCOL_TCP && it.size >= TCP_HEADER_BYTES }
+                val sourcePort = tcp?.let { readU16(it, 0) }
+                val destinationPort = tcp?.let { readU16(it, 2) }
+                val connection = sourcePort?.let { source -> synchronized(stateLock) { connections[source] } }
+                reportProtocolFailure(
+                    "USBMUX_PIPE_WRITE_PROTOCOL_FAILURE",
+                    socketRole(connection),
+                    tcp?.let { classifyTcpFlags(it[13].toInt() and 0xff, it.size - TCP_HEADER_BYTES) } ?: "UNKNOWN",
+                    tcp?.size?.minus(TCP_HEADER_BYTES),
+                    connection != null,
+                    connection != null && destinationPort == connection.destinationPort,
+                    connection?.sequenceIsExpected(tcp?.let { readU32(it, 4) } ?: 0) ?: false,
+                    connection?.acknowledgementIsInRange(tcp?.let { readU32(it, 8) } ?: 0) ?: false,
+                )
+                IphoneUsbException.Protocol("$PROTOCOL_DIAGNOSTIC_PREFIX" + "USBMUX_PIPE_WRITE_PROTOCOL_FAILURE")
+            } else error
+            fail(failure)
+            throw failure
         }
         synchronized(stateLock) {
             nextMuxSequence = (nextMuxSequence + 1) and 0xffff
@@ -239,9 +412,25 @@ class Iap2UsbMuxHost private constructor(
                 }
                 val frame = takeFrame(readTimeoutMillis) ?: continue
                 if (frame.protocol == PROTOCOL_TCP) dispatchTcp(frame.payload)
-                else if (strictDiagnostic) throw IphoneUsbException.Protocol("Unexpected USBMUX protocol=${frame.protocol}; no discard")
+                else if (strictDiagnostic) {
+                    protocolFailure("UNEXPECTED_USBMUX_PROTOCOL", socketRole = "UNKNOWN", tcpFlags = "UNKNOWN",
+                        payloadLength = null, localSocketMatched = false, remotePortMatched = false,
+                        sequenceExpected = false, acknowledgementInRange = false)
+                }
             }
         } catch (error: IphoneUsbException) {
+            if (error is IphoneUsbException.Protocol && error.message?.startsWith(PROTOCOL_DIAGNOSTIC_PREFIX) != true) {
+                reportProtocolFailure(
+                    protocolReason(error.message),
+                    socketRole = "UNKNOWN",
+                    tcpFlags = "UNKNOWN",
+                    payloadLength = null,
+                    localSocketMatched = false,
+                    remotePortMatched = false,
+                    sequenceExpected = false,
+                    acknowledgementInRange = false,
+                )
+            }
             fail(error)
         } catch (error: RuntimeException) {
             fail(IphoneUsbException.DeviceUnavailable("USBMUX reader failed", error))
@@ -252,25 +441,45 @@ class Iap2UsbMuxHost private constructor(
         val offset = 0
         val length = frame.size
         if (length < TCP_HEADER_BYTES) {
-            throw IphoneUsbException.Protocol("USBMUX TCP frame is shorter than its header")
+            protocolFailure("TCP_HEADER_TOO_SHORT", socketRole = "UNKNOWN", tcpFlags = "UNKNOWN",
+                payloadLength = null, localSocketMatched = false, remotePortMatched = false,
+                sequenceExpected = false, acknowledgementInRange = false)
         }
+        val remotePort = readU16(frame, offset)
+        val destinationPort = readU16(frame, offset + 2)
+        val flags = frame[offset + 13].toInt() and 0xff
+        val sequence = readU32(frame, offset + 4)
+        val acknowledgement = readU32(frame, offset + 8)
+        val connection = synchronized(stateLock) { connections[destinationPort] }
+        val payloadLength: Int? = null
+        val role = socketRole(connection)
+        val remotePortMatches = connection != null && remotePort == connection.destinationPort
+        val sequenceExpected = connection?.sequenceIsExpected(sequence) ?: false
+        val acknowledgementInRange = connection?.acknowledgementIsInRange(acknowledgement) ?: false
         val tcpHeaderBytes = ((frame[offset + 12].toInt() ushr 4) and 0x0f) * 4
         if (tcpHeaderBytes < TCP_HEADER_BYTES || tcpHeaderBytes > length) {
-            throw IphoneUsbException.Protocol("Invalid USBMUX TCP header length")
+            protocolFailure("TCP_HEADER_LENGTH_INVALID", role, classifyTcpFlags(flags, null), payloadLength,
+                connection != null, remotePortMatches, sequenceExpected, acknowledgementInRange)
         }
-        val destinationPort = readU16(frame, offset + 2)
-        if (strictDiagnostic && readU16(frame, offset) != LOCKDOWN_PORT) {
-            throw IphoneUsbException.Protocol("Unexpected remote TCP port=${readU16(frame, offset)}")
+        val payloadBytes = length - tcpHeaderBytes
+        if (length == tcpHeaderBytes) {
+            Log.i("xcertplay-usb", "usbmux TCP control socketRole=$role flags=${classifyTcpFlags(flags, 0)}; " +
+                "localSocketMatched=${connection != null}; remotePortMatched=$remotePortMatches; " +
+                "tcpSequenceExpectedMatch=$sequenceExpected; tcpAcknowledgementWithinSentRange=$acknowledgementInRange")
         }
-        if (length == tcpHeaderBytes) Log.i("xcertplay-usb", "usbmux TCP control destination=$destinationPort flags=${frame[13].toInt() and 0xff} ack=${readU32(frame, 8)} window=${readU16(frame, 14)}")
-        val connection = synchronized(stateLock) { connections[destinationPort] }
         if (connection == null) {
-            if (strictDiagnostic) throw IphoneUsbException.Protocol("Unexpected TCP connection destination=$destinationPort")
+            if (strictDiagnostic) protocolFailure("UNKNOWN_TCP_DESTINATION", "UNKNOWN", classifyTcpFlags(flags, payloadBytes),
+                payloadBytes, false, false, false, false)
             return
         }
+        if (strictDiagnostic && remotePort != connection.destinationPort) {
+            protocolFailure("TCP_REMOTE_PORT_MISMATCH", role, classifyTcpFlags(flags, payloadBytes), payloadBytes,
+                true, false, sequenceExpected, acknowledgementInRange)
+        }
         connection.onPacket(
-            flags = frame[offset + 13].toInt() and 0xff,
-            sequence = readU32(frame, offset + 4),
+            flags = flags,
+            sequence = sequence,
+            acknowledgement = acknowledgement,
             payload = frame.copyOfRange(offset + tcpHeaderBytes, offset + length),
         )
     }
@@ -302,6 +511,10 @@ class Iap2UsbMuxHost private constructor(
 
     companion object {
         const val LOCKDOWN_PORT = 62078
+        private const val PROTOCOL_DIAGNOSTIC_PREFIX = "USBMUX_DIAGNOSTIC:"
+        private const val TCP_PSH = 0x08
+        private const val TCP_URG = 0x20
+        private const val TCP_KNOWN_FLAGS = 0x3f
 
         private const val PROTOCOL_VERSION = 0
         private const val PROTOCOL_SETUP = 2
@@ -322,12 +535,20 @@ class Iap2UsbMuxHost private constructor(
         private const val CLOSE_JOIN_MARGIN_MILLIS = 100L
 
         /** Strict one-completion version exchange, one setup, then TCP reader; no Lockdown calls. */
-        fun openReadOnlyDiagnostic(pipe: UsbMuxBulkPipe): Iap2UsbMuxHost =
-            Iap2UsbMuxHost(pipe, 500, {}, 1_000).also {
+        fun openReadOnlyDiagnostic(
+            pipe: UsbMuxBulkPipe,
+            onDiagnostic: (String) -> Unit = {},
+            diagnosticStage: () -> String = { "BEFORE_STOPSESSION" },
+        ): Iap2UsbMuxHost =
+            Iap2UsbMuxHost(pipe, 500, onDiagnostic, 1_000, diagnosticStage).also {
                 try {
                     it.strictDiagnostic = true
                     it.beginReadOnlyDiagnostic()
                 } catch (error: Throwable) {
+                    if (error is IphoneUsbException.Protocol) {
+                        it.reportProtocolFailure(it.protocolReason(error.message), "UNKNOWN", "UNKNOWN", null,
+                            false, false, false, false)
+                    }
                     try { it.close() } catch (cleanup: Throwable) { error.addSuppressed(cleanup) }
                     throw error
                 }
@@ -383,7 +604,7 @@ class Iap2UsbMuxHost private constructor(
 class Iap2UsbMuxTcpConnection internal constructor(
     private val host: Iap2UsbMuxHost,
     internal val sourcePort: Int,
-    private val destinationPort: Int,
+    internal val destinationPort: Int,
 ) : BlockingDuplexByteStream {
     private val stateLock = Object()
     private val writeLock = Any()
@@ -402,6 +623,16 @@ class Iap2UsbMuxTcpConnection internal constructor(
         "TCP_OPEN=${connected && !closed && failure == null}; FIN=$finObserved; RST=$rstObserved; " +
             "EOF=$eofObserved; TCP_RECEIVE_TIMEOUT=$timeoutObserved"
     }
+
+    internal fun sequenceIsExpected(observed: Int): Boolean = synchronized(stateLock) {
+        observed == nextAcknowledgement
+    }
+
+    internal fun acknowledgementIsInRange(observed: Int): Boolean = synchronized(stateLock) {
+        java.lang.Integer.compareUnsigned(observed, nextSequence) <= 0
+    }
+
+    internal fun isClosedForHost(): Boolean = synchronized(stateLock) { closed }
 
     /** Sends [data] as an ordered byte stream, split into USBMUX TCP payloads of at most 16 KiB. */
     override fun send(data: ByteArray) {
@@ -465,21 +696,24 @@ class Iap2UsbMuxTcpConnection internal constructor(
 
     override fun close() {
         var cleanupFailure: IphoneUsbException? = null
-        val shouldSendFin = synchronized(stateLock) {
+        val fin = synchronized(stateLock) {
             if (closed) return
             closed = true
             stateLock.notifyAll()
-            connected
+            if (connected) {
+                val sequence = nextSequence
+                nextSequence += 1
+                sequence to nextAcknowledgement
+            } else null
         }
-        if (shouldSendFin) {
+        if (fin != null) {
             try {
                 synchronized(writeLock) {
-                    val sequenceAndAck = synchronized(stateLock) { nextSequence to nextAcknowledgement }
                     host.sendTcp(
                         sourcePort,
                         destinationPort,
-                        sequenceAndAck.first,
-                        sequenceAndAck.second,
+                        fin.first,
+                        fin.second,
                         TCP_FIN or TCP_ACK,
                         ByteArray(0),
                     )
@@ -539,7 +773,11 @@ class Iap2UsbMuxTcpConnection internal constructor(
         stateLock.notifyAll()
     }
 
-    internal fun onPacket(flags: Int, sequence: Int, payload: ByteArray) {
+    internal fun onPacket(flags: Int, sequence: Int, acknowledgement: Int, payload: ByteArray) {
+        if (isClosedForHost()) {
+            handleClosingPacket(flags, sequence, acknowledgement, payload)
+            return
+        }
         if ((flags and TCP_RST) != 0) {
             synchronized(stateLock) {
                 rstObserved = true
@@ -575,10 +813,15 @@ class Iap2UsbMuxTcpConnection internal constructor(
             sendControl(TCP_ACK)
         }
         if ((flags and TCP_FIN) != 0) {
+            var alreadyClosed = false
             synchronized(stateLock) {
                 finObserved = true
-                if (closed) return
-                nextAcknowledgement += 1
+                if (closed) alreadyClosed = true
+                else nextAcknowledgement += 1
+            }
+            if (alreadyClosed) {
+                handleClosingPacket(flags, sequence, acknowledgement, payload)
+                return
             }
             sendControl(TCP_ACK)
             synchronized(stateLock) {
@@ -586,6 +829,43 @@ class Iap2UsbMuxTcpConnection internal constructor(
                 stateLock.notifyAll()
             }
             host.removeConnection(this)
+        }
+    }
+
+    private fun handleClosingPacket(flags: Int, sequence: Int, acknowledgement: Int, payload: ByteArray) {
+        if (!host.isStrictDiagnostic()) return
+        if (payload.isNotEmpty()) {
+            val sequenceExpected = sequenceIsExpected(sequence)
+            val acknowledgementInRange = acknowledgementIsInRange(acknowledgement)
+            if (flags == TCP_RST && host.isRetiredServiceConnection(this) && sequenceExpected && acknowledgementInRange) {
+                synchronized(stateLock) { rstObserved = true }
+                host.recordClosingSocketFrame(flags)
+                host.recordClosingSocketRstPayload(payload.size)
+                return
+            }
+            val reason = when {
+                flags != TCP_RST -> "CLOSED_SOCKET_PAYLOAD"
+                !sequenceExpected -> "CLOSED_SOCKET_RST_SEQUENCE_INVALID"
+                !acknowledgementInRange -> "CLOSED_SOCKET_RST_ACKNOWLEDGEMENT_INVALID"
+                else -> "CLOSED_SOCKET_RST_PAYLOAD_UNAUTHORIZED"
+            }
+            host.closedSocketProtocolFailure(this, reason, flags, sequence, acknowledgement, payload.size)
+        }
+        when (flags) {
+            TCP_ACK -> host.recordClosingSocketFrame(flags)
+            TCP_RST, TCP_RST or TCP_ACK -> {
+                synchronized(stateLock) { rstObserved = true }
+                host.recordClosingSocketFrame(flags)
+            }
+            TCP_FIN, TCP_FIN or TCP_ACK -> {
+                synchronized(stateLock) {
+                    finObserved = true
+                    nextAcknowledgement = sequence + 1
+                }
+                host.sendTcp(sourcePort, destinationPort, nextSequence, sequence + 1, TCP_ACK, ByteArray(0))
+                host.recordClosingSocketFrame(flags)
+            }
+            else -> host.closedSocketProtocolFailure(this, "CLOSED_SOCKET_FLAGS_INVALID", flags, sequence, acknowledgement, 0)
         }
     }
 
@@ -606,11 +886,11 @@ class Iap2UsbMuxTcpConnection internal constructor(
         if (!connected || closed) throw IphoneUsbException.DeviceUnavailable("USBMUX TCP connection is not open")
     }
 
-    private companion object {
-        const val TCP_FIN = 0x01
-        const val TCP_SYN = 0x02
-        const val TCP_RST = 0x04
-        const val TCP_ACK = 0x10
+    companion object {
+        internal const val TCP_FIN = 0x01
+        internal const val TCP_SYN = 0x02
+        internal const val TCP_RST = 0x04
+        internal const val TCP_ACK = 0x10
         const val MAX_SEND_PAYLOAD_BYTES = 16 * 1024
         const val NANOS_PER_MILLISECOND = 1_000_000L
     }
