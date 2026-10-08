@@ -51,6 +51,7 @@ import com.shilapi.xcertplay.network.CarHotspotSettings
 import com.shilapi.xcertplay.network.CarHotspotTethering
 import com.shilapi.xcertplay.network.WifiP2pChannels
 import com.shilapi.xcertplay.network.Phase3ADeviceDiagnostics
+import com.shilapi.xcertplay.network.WirelessCapabilitySnapshot
 import com.shilapi.xcertplay.orchestration.WirelessHotspotMode
 import com.shilapi.xcertplay.orchestration.LegacyLaunchBuild
 import com.shilapi.xcertplay.transport.EvChargingConnectors
@@ -86,6 +87,11 @@ class DiPlayActivity : ComponentActivity() {
     private var phase3AText: TextView? = null
     private var phase3AReport = "Phase 3A network diagnostics: not sampled"
     private var phase3AGeneration = 0
+    private var wirelessCapabilityReport = "Phase 3W.1 wireless capability snapshot: not run"
+    private var wirelessCapabilityText: TextView? = null
+    private var wirelessCapabilityButton: Button? = null
+    private var wirelessCapabilityRunning = false
+    private var wirelessCapabilityCaptured = false
     private var phase3BDiagnostics: Phase3BDeviceDiagnostics? = null
     private var phase3BText: TextView? = null
     private var phase3BReport = "Phase 3B Bluetooth diagnostics: not sampled"
@@ -114,6 +120,10 @@ class DiPlayActivity : ComponentActivity() {
     private var passiveI2cInventoryText: TextView? = null
     private var passiveI2cInventoryButton: Button? = null
     private var passiveI2cInventoryRunning = false
+    private var mfiProviderSnapshotReport = MfiProviderSnapshot.NOT_RUN
+    private var mfiProviderSnapshotText: TextView? = null
+    private var mfiProviderSnapshotButton: Button? = null
+    private var mfiProviderSnapshotRunning = false
     private var passiveUsbInventory: PassiveUsbInventory? = null
     private var passiveUsbReport = PassiveUsbDeviceDiagnostic.NOT_RUN
     private var passiveUsbText: TextView? = null
@@ -464,6 +474,8 @@ class DiPlayActivity : ComponentActivity() {
 
     private fun render() {
         phase3AText = null
+        wirelessCapabilityText = null
+        wirelessCapabilityButton = null
         phase3BText = null
         vendorInvestigationText = null
         nforetekText = null
@@ -475,6 +487,8 @@ class DiPlayActivity : ComponentActivity() {
         phase3b8Button = null
         passiveI2cInventoryText = null
         passiveI2cInventoryButton = null
+        mfiProviderSnapshotText = null
+        mfiProviderSnapshotButton = null
         // A pending assignment belongs to the widgets being replaced, never to another page.
         if (LegacyLaunchBuild.CONNECTIONS_ENABLED) WheelKeyService.cancelLearning()
         // A restore still waiting for layout keeps its target: the old page was never laid out.
@@ -1015,6 +1029,38 @@ class DiPlayActivity : ComponentActivity() {
         languageSettings(content)
     }
 
+    private fun runWirelessCapabilitySnapshot() {
+        if (wirelessCapabilityRunning || wirelessCapabilityCaptured) return
+        wirelessCapabilityCaptured = true
+        wirelessCapabilityRunning = true
+        wirelessCapabilityReport = getString(R.string.phase3w1_running)
+        wirelessCapabilityText?.text = wirelessCapabilityReport
+        wirelessCapabilityButton?.apply {
+            isEnabled = false
+            text = getString(R.string.phase3w1_running)
+        }
+        Thread({
+            val report = try {
+                WirelessCapabilitySnapshot(applicationContext).capture()
+            } catch (error: Exception) {
+                "Phase 3W.1 wireless capability snapshot\nSnapshot unavailable: ${error.javaClass.simpleName}"
+            } catch (error: LinkageError) {
+                "Phase 3W.1 wireless capability snapshot\nSnapshot unavailable: ${error.javaClass.simpleName}"
+            }
+            runOnUiThread {
+                wirelessCapabilityRunning = false
+                wirelessCapabilityReport = report
+                if (!isFinishing && !isDestroyed) {
+                    wirelessCapabilityText?.text = report
+                    wirelessCapabilityButton?.apply {
+                        isEnabled = false
+                        text = getString(R.string.phase3w1_done)
+                    }
+                }
+            }
+        }, "diplay-wireless-capability-snapshot").start()
+    }
+
     private fun launchTestSettings(content: LinearLayout) {
         content.addView(label(getString(R.string.settings), 34, TEXT, true))
         content.addView(label(getString(R.string.legacy_launch_only_description), 17, MUTED))
@@ -1032,6 +1078,20 @@ class DiPlayActivity : ComponentActivity() {
                 card.addView(button(getString(R.string.phase3a_start), false) {
                     if (!controlledPairBusy()) phase3ADiagnostics?.startNetworkTest()
                 }, matchButton())
+            }
+            section(content, getString(R.string.phase3w1_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(getString(R.string.phase3w1_help), 16, MUTED))
+                wirelessCapabilityText = label(wirelessCapabilityReport, 15, TEXT).apply { setTextIsSelectable(true) }
+                card.addView(wirelessCapabilityText)
+                wirelessCapabilityButton = button(
+                    if (wirelessCapabilityRunning) getString(R.string.phase3w1_running)
+                    else if (wirelessCapabilityCaptured) getString(R.string.phase3w1_done)
+                    else getString(R.string.phase3w1_capture),
+                    false,
+                ) { runWirelessCapabilitySnapshot() }.apply {
+                    isEnabled = !wirelessCapabilityRunning && !wirelessCapabilityCaptured
+                }
+                card.addView(wirelessCapabilityButton, matchButton())
             }
         }
         if (LegacyLaunchBuild.PHASE3B_DIAGNOSTICS_ENABLED) {
@@ -1272,6 +1332,16 @@ class DiPlayActivity : ComponentActivity() {
                     else getString(R.string.phase3c3c_run), false,
                 ) { runPassiveI2cInventory() }.apply { isEnabled = !passiveI2cInventoryRunning }
                 card.addView(passiveI2cInventoryButton, matchButton())
+            }
+            section(content, getString(R.string.phase3d2z_mfi_snapshot_title), R.drawable.ic_dp_diagnostics) { card ->
+                card.addView(label(MfiProviderSnapshot.SAFETY, 16, WARNING))
+                mfiProviderSnapshotText = label(mfiProviderSnapshotReport, 14, MUTED).apply { setTextIsSelectable(true) }
+                card.addView(mfiProviderSnapshotText)
+                mfiProviderSnapshotButton = button(
+                    if (mfiProviderSnapshotRunning) getString(R.string.phase3d2z_mfi_snapshot_running)
+                    else getString(R.string.phase3d2z_mfi_snapshot_run), false,
+                ) { runMfiProviderSnapshot() }.apply { isEnabled = !mfiProviderSnapshotRunning }
+                card.addView(mfiProviderSnapshotButton, matchButton())
             }
             section(content, getString(R.string.phase3b3_cache_title), R.drawable.ic_dp_diagnostics) { card ->
                 card.addView(label(getString(R.string.phase3b3_cache_help), 16, MUTED))
@@ -2253,6 +2323,38 @@ class DiPlayActivity : ComponentActivity() {
                 }
             }
         }, "diplay-passive-i2c-inventory").start()
+    }
+
+    private fun runMfiProviderSnapshot() {
+        if (controlledPairBusy() || mfiProviderSnapshotRunning) return
+        mfiProviderSnapshotRunning = true
+        mfiProviderSnapshotReport = getString(R.string.phase3d2z_mfi_snapshot_running)
+        mfiProviderSnapshotText?.text = mfiProviderSnapshotReport
+        mfiProviderSnapshotButton?.apply {
+            isEnabled = false
+            text = getString(R.string.phase3d2z_mfi_snapshot_running)
+        }
+        Thread({
+            val report = try {
+                val manager = getSystemService(Context.USB_SERVICE) as? android.hardware.usb.UsbManager
+                MfiProviderSnapshot(AndroidMfiProviderSnapshotSource(applicationContext, manager)).report()
+            } catch (error: Exception) {
+                "${MfiProviderSnapshot.TITLE}\nSnapshot failed=${error.javaClass.simpleName}; values and credentials not collected."
+            } catch (error: LinkageError) {
+                "${MfiProviderSnapshot.TITLE}\nSnapshot unavailable=${error.javaClass.simpleName}; STOP."
+            }
+            runOnUiThread {
+                mfiProviderSnapshotRunning = false
+                mfiProviderSnapshotReport = report
+                if (!isFinishing && !isDestroyed) {
+                    mfiProviderSnapshotText?.text = report
+                    mfiProviderSnapshotButton?.apply {
+                        isEnabled = true
+                        text = getString(R.string.phase3d2z_mfi_snapshot_run)
+                    }
+                }
+            }
+        }, "diplay-mfi-provider-snapshot").start()
     }
 
     private fun nforetekAction(bind: Boolean) {
@@ -4234,6 +4336,7 @@ class DiPlayActivity : ComponentActivity() {
         val vendorApkDiagnostics = vendorApkExportReport
         val phase3b8Diagnostics = phase3b8Report
         val passiveI2cDiagnostics = passiveI2cInventoryReport
+        val mfiProviderSnapshotDiagnostics = mfiProviderSnapshotReport
         val passiveUsbDiagnostics = passiveUsbReport
         val directUsbMuxDiagnostics = directUsbMuxDiagnostic?.report() ?: directUsbMuxReport
         val usbConfigurationDiagnostics = usbConfigurationReport
@@ -4254,6 +4357,8 @@ class DiPlayActivity : ComponentActivity() {
         Thread({
             val result = runCatching {
                 val report = buildString {
+                    appendLine("--- Phase 3W.1 wireless capability snapshot ---")
+                    appendLine(wirelessCapabilityReport)
                     if (!LegacyLaunchBuild.CONNECTIONS_ENABLED) {
                         appendLine("DiPlay ${version()} / Phase 3B.2 NForetek metadata/bind discovery")
                         appendLine("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}")
@@ -4278,6 +4383,8 @@ class DiPlayActivity : ComponentActivity() {
                         appendLine(phase3b8Diagnostics)
                         appendLine("--- Phase 3C.3C passive MFi/I2C inventory ---")
                         appendLine(passiveI2cDiagnostics)
+                        appendLine("--- Phase 3D.2Z read-only MFi provider snapshot ---")
+                        appendLine(mfiProviderSnapshotDiagnostics)
                         appendLine("--- Phase 3D.1 direct iPhone USB detection ---")
                         appendLine(passiveUsbDiagnostics)
                         appendLine("--- Phase 3D.2 direct USBMUX/Lockdown test ---")
@@ -4373,6 +4480,8 @@ class DiPlayActivity : ComponentActivity() {
                     appendLine()
                     appendLine("--- Phase 3B.8 full E01 CarPlay system inventory ---")
                     appendLine(phase3b8Diagnostics)
+                    appendLine("--- Phase 3D.2Z read-only MFi provider snapshot ---")
+                    appendLine(mfiProviderSnapshotDiagnostics)
                     appendLine("--- Phase 3D.1 direct iPhone USB detection ---")
                     appendLine(passiveUsbDiagnostics)
                     appendLine("--- Phase 3D.2 direct USBMUX/Lockdown test ---")

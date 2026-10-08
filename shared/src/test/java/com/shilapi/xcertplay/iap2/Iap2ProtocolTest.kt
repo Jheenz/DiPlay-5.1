@@ -19,6 +19,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -41,6 +42,31 @@ class Iap2ProtocolTest {
     }
 
     @Test
+    fun framerWaitsForTruncatedFrameAndResynchronizesPastInvalidShortLength() {
+        val valid = Iap2Frame(0x4300, byteArrayOf(0, 1))
+        val encoded = valid.encodedFrame()
+        val truncated = Iap2CsmFramer()
+        assertTrue(truncated.offer(encoded.copyOf(encoded.size - 1)).isEmpty())
+        assertEquals(listOf(valid), truncated.offer(encoded.copyOfRange(encoded.lastIndex, encoded.size)))
+
+        val malformedHeader = byteArrayOf(0x40, 0x40, 0, 5, 0, 1)
+        assertEquals(listOf(valid), Iap2CsmFramer().offer(malformedHeader + encoded))
+    }
+
+    @Test
+    fun splitForLinkPreservesOneCompleteCsmFrameWithinPeerPayloadLimit() {
+        val frame = Iap2Frame(0x1d01, ByteArray(31) { it.toByte() })
+        val encoded = frame.encodedFrame()
+        val chunks = Iap2CsmFramer.splitForLink(frame, linkChunkSize = 9)
+
+        assertTrue(chunks.all { it.size <= 9 })
+        assertArrayEquals(encoded, chunks.fold(ByteArray(0)) { result, chunk -> result + chunk })
+        assertThrows(IllegalArgumentException::class.java) {
+            Iap2CsmFramer.splitForLink(encoded.copyOf(encoded.size - 1), linkChunkSize = 9)
+        }
+    }
+
+    @Test
     fun orderedParameterListPreservesRepeatedAndUnknownIds() {
         val original = listOf(
             Iap2Parameter(0, byteArrayOf(1)),
@@ -53,6 +79,16 @@ class Iap2ProtocolTest {
         assertArrayEquals(byteArrayOf(1), decoded.all(0)[0].payload)
         assertArrayEquals(byteArrayOf(2), decoded.all(0)[1].payload)
         assertArrayEquals(byteArrayOf(3, 4), decoded.first(0x7fff)?.payload)
+    }
+
+    @Test
+    fun parameterParserRejectsTruncatedHeaderAndDeclaredPayload() {
+        assertThrows(Iap2ProtocolException::class.java) {
+            Iap2ParameterList.parse(byteArrayOf(0, 4, 0))
+        }
+        assertThrows(Iap2ProtocolException::class.java) {
+            Iap2ParameterList.parse(byteArrayOf(0, 5, 0, 1))
+        }
     }
 
     @Test

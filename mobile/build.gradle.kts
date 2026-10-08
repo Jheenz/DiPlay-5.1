@@ -43,7 +43,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".legacytest"
-            versionNameSuffix = "-api22-phase3d2w-retired-rst-payload-fix"
+            versionNameSuffix = "-api22-phase3d2z-mfi-provider-snapshot"
         }
         release {
             optimization {

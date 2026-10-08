@@ -1,7 +1,7 @@
 package com.shilapi.xcertplay.mfi
 
 import com.shilapi.xcertplay.iap2.message.Iap2AuthenticationMessages
-import com.shilapi.xcertplay.iap2.session.Iap2Session
+import com.shilapi.xcertplay.iap2.session.Iap2MessageSession
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 
 /** Runs LIVI's minimal iAP2 CSM MFi exchange without taking ownership of [Iap2Session]. */
@@ -17,7 +17,7 @@ class Iap2MfiAuthenticationClient(
 
     /** Blocks until the phone confirms AA05, or throws a typed authentication failure. */
     fun run(
-        session: Iap2Session,
+        session: Iap2MessageSession,
         timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS,
         onProgress: (String) -> Unit = {},
     ) {
@@ -31,6 +31,7 @@ class Iap2MfiAuthenticationClient(
             MfiCertificateType.BAA -> Iap2AuthenticationMessages.accessoryCertificateBody(certificate)
         }
         val certificatePayloadBytes = certificateFrame.payload.size
+        var challengeResponseSent = false
         onProgress(
             "mfi type=${authentication.certificateType} " +
                 "certificate loaded bytes=${certificate.size} " +
@@ -55,9 +56,13 @@ class Iap2MfiAuthenticationClient(
                     onProgress("iap2 mfi rx=0xaa02 challenge bytes=${challenge.size}")
                     val signature = authentication.signChallenge(challenge)
                     send(session, Iap2AuthenticationMessages.response(signature), deadlineNanos)
+                    challengeResponseSent = true
                     onProgress("iap2 mfi tx=0xaa03 signature bytes=${signature.size}")
                 }
                 AUTHENTICATION_SUCCEEDED -> {
+                    if (!challengeResponseSent) {
+                        throw Iap2MfiAuthenticationException("iAP2 MFi authentication succeeded before a challenge response was sent")
+                    }
                     onProgress("iap2 mfi rx=0xaa05 authentication-succeeded")
                     return
                 }
@@ -70,7 +75,7 @@ class Iap2MfiAuthenticationClient(
     }
 
     private fun send(
-        session: Iap2Session,
+        session: Iap2MessageSession,
         frame: Iap2Frame,
         deadlineNanos: Long,
     ) {

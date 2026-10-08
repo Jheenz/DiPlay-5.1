@@ -3,7 +3,7 @@ package com.shilapi.xcertplay.transport
 import com.shilapi.xcertplay.iap2.body.Iap2BodyReader
 import com.shilapi.xcertplay.iap2.catalog.Iap2Endpoints
 import com.shilapi.xcertplay.iap2.message.Iap2Messages
-import com.shilapi.xcertplay.iap2.session.Iap2Session
+import com.shilapi.xcertplay.iap2.session.Iap2MessageSession
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import com.shilapi.xcertplay.transport.Iap2VehicleStatus.electricVehicleComponents
 import java.io.IOException
@@ -154,7 +154,7 @@ sealed class Iap2IdentificationException(message: String) : IOException(message)
  * This is intentionally only identification: it neither invokes MFi nor itself starts any
  * CarPlay, subscription, power, media, or UI service.
  */
-class Iap2IdentificationClient(private val session: Iap2Session) {
+class Iap2IdentificationClient(private val session: Iap2MessageSession) {
     /** Waits for link negotiation, then completes the 1D00/1D01/1D02 exchange. */
     @Throws(IphoneUsbException::class, Iap2IdentificationException::class)
     fun identify(config: Iap2IdentificationConfig, timeoutMillis: Long = DEFAULT_TIMEOUT_MILLIS) {
@@ -166,12 +166,19 @@ class Iap2IdentificationClient(private val session: Iap2Session) {
             throw IphoneUsbException.TimedOut("Timed out waiting for iAP2 control session readiness")
         }
 
+        var identificationInformationSent = false
         while (true) {
             val frame = session.recv(remainingMillis(deadlineNanos))
                 ?: throw IphoneUsbException.TimedOut("Timed out waiting for iAP2 identification")
             when (frame.messageId) {
-                START_IDENTIFICATION -> session.send(identificationInformation(config), remainingMillis(deadlineNanos))
-                IDENTIFICATION_ACCEPTED -> return
+                START_IDENTIFICATION -> {
+                    session.send(identificationInformation(config), remainingMillis(deadlineNanos))
+                    identificationInformationSent = true
+                }
+                IDENTIFICATION_ACCEPTED -> {
+                    if (!identificationInformationSent) throw Iap2IdentificationException.UnexpectedMessage(frame.messageId)
+                    return
+                }
                 IDENTIFICATION_REJECTED -> {
                     val rejected = Iap2BodyReader.of(frame).list().mapTo(LinkedHashSet()) { it.id }
                     throw Iap2IdentificationException.Rejected(rejected)

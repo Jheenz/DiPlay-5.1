@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [28], qualifiers = "en", manifest = Config.NONE)
 class Phase3ADeviceSettingsTest {
-    @Test fun settingsShowDedicatedDiagnosticsAndSafeActionsWithoutConnectionControls() {
+    @Test fun settingsShowDiagnosticsAndKeepProductionConnectionsDisabled() {
         val activity = Robolectric.buildActivity(DiPlayActivity::class.java).get()
         activity.setTheme(android.R.style.Theme_Material_NoActionBar)
         val sample = "Local IPv4: 192.168.43.1\nManual readiness: FAIL apEnabled=false"
@@ -30,10 +30,23 @@ class Phase3ADeviceSettingsTest {
         val buttons = views.filterIsInstance<Button>().map { it.text.toString() }
         assertTrue(buttons.contains("Refresh network diagnostics"))
         assertTrue(buttons.contains("Start Phase 3A network test"))
+        assertTrue(buttons.contains("Capture wireless capability snapshot"))
         assertTrue(buttons.contains("Save diagnostic report"))
         val collectionOnly = "Collect and export Apple/USB stack files"
         assertTrue(buttons.contains(collectionOnly))
-        assertFalse(buttons.any { it == "Connect" || (it.contains("USB") && it != collectionOnly) })
+        val allowedUsbDiagnostics = setOf(
+            collectionOnly,
+            "Test USBMUX + Lockdown",
+            "Test USBMUX version exchange",
+            "Inspect local pairing records (NO USB)",
+            "Claim/release configuration-5 USBMUX",
+            "Test QDrive USB mode transition",
+            "Read active USB configuration",
+            "Map iPhone USB configurations",
+            "Scan connected USB devices",
+        )
+        assertEquals(allowedUsbDiagnostics, buttons.filter { it.contains("USB") }.toSet())
+        assertFalse(buttons.contains("Connect"))
         assertFalse(LegacyLaunchBuild.CONNECTIONS_ENABLED)
         assertFalse(LegacyLaunchBuild.VENDOR_INTEGRATION_ENABLED)
     }

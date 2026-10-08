@@ -86,6 +86,7 @@ class Iap2LinkEngine(
                 if (bytes.size < SYNCHRONIZATION_FIXED_BYTES || u8(bytes[0]) != SYNCHRONIZATION_VERSION) {
                     return null
                 }
+                if ((bytes.size - SYNCHRONIZATION_FIXED_BYTES) % SESSION_DESCRIPTOR_BYTES != 0) return null
                 val descriptors = ArrayList<SessionDescriptor>()
                 var offset = SYNCHRONIZATION_FIXED_BYTES
                 while (offset + SESSION_DESCRIPTOR_BYTES <= bytes.size) {

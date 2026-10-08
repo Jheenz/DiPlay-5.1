@@ -11,6 +11,14 @@ import com.shilapi.xcertplay.transport.BlockingDuplexByteStream
 import com.shilapi.xcertplay.transport.Iap2CsmChannel
 import com.shilapi.xcertplay.transport.Iap2ArtworkTransfer
 
+/** Protocol-facing CSM operations shared by the live session and deterministic offline fixtures. */
+interface Iap2MessageSession {
+    val isClosed: Boolean
+    fun awaitReady(timeoutMillis: Long): Boolean
+    fun send(frame: Iap2Frame, timeoutMillis: Long = 5_000L)
+    fun recv(timeoutMillis: Long): Iap2Frame?
+}
+
 /**
  * One immediately readable and writable iAP2 CSM session.
  *
@@ -22,16 +30,16 @@ class Iap2Session private constructor(
     private val channel: Iap2CsmChannel,
     private val traceContext: String,
     private val onTrace: (String) -> Unit,
-) : AutoCloseable {
-    val isClosed: Boolean get() = channel.isClosed
+) : Iap2MessageSession, AutoCloseable {
+    override val isClosed: Boolean get() = channel.isClosed
 
-    fun awaitReady(timeoutMillis: Long): Boolean {
+    override fun awaitReady(timeoutMillis: Long): Boolean {
         val ready = channel.awaitReady(timeoutMillis)
         emitTrace("IAP2 READY [$traceContext] ready=$ready")
         return ready
     }
 
-    fun send(frame: Iap2Frame, timeoutMillis: Long = DEFAULT_SEND_TIMEOUT_MILLIS) {
+    override fun send(frame: Iap2Frame, timeoutMillis: Long) {
         try {
             channel.send(frame, timeoutMillis)
             emitFrameTrace(Iap2TraceDirection.TX, frame)
@@ -64,7 +72,7 @@ class Iap2Session private constructor(
         send(Iap2Messages.buildRaw(messageId, block), timeoutMillis)
     }
 
-    fun recv(timeoutMillis: Long): Iap2Frame? {
+    override fun recv(timeoutMillis: Long): Iap2Frame? {
         return try {
             channel.recv(timeoutMillis)?.also { emitFrameTrace(Iap2TraceDirection.RX, it) }
         } catch (failure: Throwable) {

@@ -16,6 +16,9 @@
     <string name="phase3d2w_test">Test CarKit service TLS (NO APP TRAFFIC)</string>
     <string name="phase3d2w_running">Running one Lockdown session, one CarKit service TCP connection and TLS handshake, then encrypted StopSession and cleanup. NO CARKIT APPLICATION TRAFFIC. Wait and save the report...</string>
     <string name="phase3d2w_confirm">ONE SERVICE TCP CONNECTION + AUTHENTICATED TLS HANDSHAKE ONLY — NO CARKIT APPLICATION TRAFFIC\n\nThis changes live iPhone session state. Requires one readable existing PAIRED record, the already-transitioned Apple USB device, existing permission, active configuration 5, and its scoped USBMUX interface. This one manual action performs QueryType and identity association, StartSession once, authenticated Lockdown TLS, and one encrypted StartService for com.apple.carkit.service. Only if StartService succeeds with a valid port and EnableServiceSSL=true, it opens one additional USBMUX TCP socket to that port while preserving the Lockdown TLS socket, then performs one TLS handshake using the stored paired-device credentials and peer certificate pin. It sends no application data. It closes service TLS/TCP before encrypted StopSession on Lockdown TLS, then closes Lockdown and USB resources. No Pair, ValidatePair, SetValue, identity regeneration, record writes, retries, reconnect, CarKit commands, iAP2, MFi, NCM, AirPlay, or CarPlay. Do not approve Trust prompts. If TLS behavior is unsupported or peer validation fails, save the report and STOP; never weaken certificate checks or retry. Proceed?</string>
+    <string name="phase3d2z_mfi_snapshot_title">Phase 3D.2Z — Read-Only MFi Provider Snapshot</string>
+    <string name="phase3d2z_mfi_snapshot_run">Inspect MFi provider configuration</string>
+    <string name="phase3d2z_mfi_snapshot_running">Reading provider configuration and passive access metadata only; no provider initialization, I2C transactions, USB permission/open, network, or iPhone access...</string>
     <string name="phase3d2p2_local_title">Phase 3D.2P.2 — Local pairing-record metadata (NO USB)</string>
     <string name="phase3d2p2_local_test">Inspect local pairing records (NO USB)</string>
     <string name="phase3d2p1_title">Phase 3D.2P.1 — Existing-record ValidatePair (NO PAIR)</string>
@@ -131,4 +134,9 @@
     <string name="phase3a_refresh">Refresh network diagnostics</string>
     <string name="phase3a_start">Start Phase 3A network test</string>
     <string name="phase3a_test_help">Read-only network sampling refreshes about every 3 seconds. Start checks stable manual-hotspot readiness and runs a 20-second system NSD test only. No CarPlay handshake. Test peers must advertise _diplay-phase3a._tcp.; observing our own advertisement does not prove laptop reachability. API 22 NSD is platform-scoped, not bound to the selected interface. Pausing the app stops the test.</string>
+    <string name="phase3w1_title">Phase 3W.1 wireless capability snapshot</string>
+    <string name="phase3w1_help">One manual, read-only framework snapshot. No scans, hotspot changes, Bluetooth discovery, connections or advertisements. SSIDs, addresses and device identifiers are omitted. It cannot establish SoftAP band support or AP+STA concurrency.</string>
+    <string name="phase3w1_capture">Capture wireless capability snapshot</string>
+    <string name="phase3w1_running">Reading capabilities...</string>
+    <string name="phase3w1_done">Snapshot captured</string>
 </resources>

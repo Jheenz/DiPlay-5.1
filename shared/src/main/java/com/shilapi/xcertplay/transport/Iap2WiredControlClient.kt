@@ -2,7 +2,7 @@ package com.shilapi.xcertplay.transport
 
 import com.shilapi.xcertplay.iap2.message.Iap2CarPlayMessages
 import com.shilapi.xcertplay.iap2.message.Iap2ControlMessages
-import com.shilapi.xcertplay.iap2.session.Iap2Session
+import com.shilapi.xcertplay.iap2.session.Iap2MessageSession
 import com.shilapi.xcertplay.iap2.wire.Iap2Frame
 import com.shilapi.xcertplay.mfi.Iap2MfiAuthenticationClient
 import java.net.Inet6Address
@@ -17,7 +17,7 @@ import java.net.InetAddress
  * an AirPlay receiver.
  */
 class Iap2WiredControlClient(
-    private val session: Iap2Session,
+    private val session: Iap2MessageSession,
     private val mfi: Iap2MfiAuthenticationClient,
 ) {
     fun run(

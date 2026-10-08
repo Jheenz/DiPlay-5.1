@@ -1,5 +1,13 @@
 # Test checklist
 
+## Phase 3D.2Z - read-only MFi provider snapshot
+
+See [the one-shot 3D.2Z E01 procedure](PHASE3D2Z_MFI_PROVIDER_SNAPSHOT.md).
+`MfiProviderSnapshotTest` covers persisted-target precedence, provider path states,
+metadata-only behavior, and redaction; `MfiProviderSnapshotUiTest` confirms the action
+does not run automatically. Tests use Robolectric 28; the mobile APK remains minSdk22.
+The snapshot never reports MFi readiness or initializes an authentication provider.
+
 ## Phase 3D.2W - CarKit service TCP/TLS handshake only
 
 See [the one-run 3D.2W hardware procedure](PHASE3D2W_CARKIT_SERVICE_TCP_TLS.md).

@@ -20,6 +20,40 @@ import com.shilapi.xcertplay.network.WifiP2pChannels
 import com.shilapi.xcertplay.transport.LockdownPairRecord
 import java.io.File
 
+internal data class MfiTargetSelectionSnapshot(
+    val persistedTarget: MfiTarget?,
+    val persistedState: String,
+    val effectiveTarget: MfiTarget,
+    val fallbackSource: String,
+)
+
+internal data class MfiProviderPreferenceMetadata(
+    val i2cPath: String,
+    val i2cPathSource: String,
+    val remoteEndpointConfigured: Boolean,
+    val remoteUsesHttps: Boolean,
+    val remoteTokenConfigured: Boolean,
+)
+
+internal fun resolveMfiTargetSelection(storedValue: String?): MfiTargetSelectionSnapshot {
+    val persisted = storedValue?.let { value -> MfiTarget.entries.firstOrNull { it.name == value } }
+    return when {
+        persisted != null -> MfiTargetSelectionSnapshot(persisted, "PERSISTED", persisted, "NONE")
+        storedValue == null -> MfiTargetSelectionSnapshot(
+            null,
+            "NOT_SET",
+            MfiTarget.LOCAL,
+            "ACTIVITY_LOCAL_DEFAULT_NO_SAVED_TARGET",
+        )
+        else -> MfiTargetSelectionSnapshot(
+            null,
+            "INVALID_REDACTED",
+            MfiTarget.LOCAL,
+            "ACTIVITY_LOCAL_DEFAULT_UNRECOGNIZED_TARGET",
+        )
+    }
+}
+
 /** SharedPreferences persistence for the accessory identity and paired controllers. */
 object AirPlayPersistence {
     /** 0 uses usage-based routing; 1–20 select stream types supported by the head unit. */
@@ -235,10 +269,26 @@ object AirPlayPersistence {
             .apply()
     }
 
-    fun loadMfiTarget(context: Context): MfiTarget {
-        val stored = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MFI_TARGET, null)
-        return MfiTarget.entries.firstOrNull { it.name == stored } ?: MfiTarget.LOCAL
+    internal fun loadMfiTargetSelection(context: Context): MfiTargetSelectionSnapshot = resolveMfiTargetSelection(
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_MFI_TARGET, null),
+    )
+
+    fun loadMfiTarget(context: Context): MfiTarget = loadMfiTargetSelection(context).effectiveTarget
+
+    internal fun loadMfiProviderPreferenceMetadata(context: Context): MfiProviderPreferenceMetadata {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val storedPath = prefs.getString(KEY_MFI_I2C_PATH, null)?.takeIf { it.isNotBlank() }
+        val i2cPath = storedPath ?: DEFAULT_MFI_I2C_PATH
+        val server = prefs.getString(KEY_REMOTE_MFI_SERVER, null).orEmpty()
+        val token = prefs.getString(KEY_REMOTE_MFI_TOKEN, null).orEmpty()
+        val scheme = server.substringBefore("://", missingDelimiterValue = "")
+        return MfiProviderPreferenceMetadata(
+            i2cPath = i2cPath,
+            i2cPathSource = if (storedPath == null) "ACTIVITY_DEFAULT" else "PERSISTED_SETTING",
+            remoteEndpointConfigured = server.isNotBlank(),
+            remoteUsesHttps = scheme.equals("https", ignoreCase = true),
+            remoteTokenConfigured = token.isNotBlank(),
+        )
     }
 
     fun saveMfiTarget(context: Context, target: MfiTarget) {
