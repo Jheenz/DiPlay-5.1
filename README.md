@@ -2,7 +2,9 @@
 
 **CarPlay for compatible BYD Android head units.** Wired and wireless, with the familiar DiAuto interface. Independent app: `com.shihab.diplay`.
 
-> **BYD support scope:** These projects focus on BYD cars. They may work on other brands, but other brands are unsupported and there are no plans to add support or fix brand-specific incompatibilities.
+> **BYD release scope:** The public release targets compatible BYD head units. Other brands are unsupported. A separate Geely E01 research effort is documented below; it is not a supported release or a promise of future Geely support.
+
+**Geely E01 research status (not supported):** Testing is on a Geely Okavango head unit identified as `alps E01`, MT6735, Android 5.1/API 22, firmware `SWVX11A0126H5173.00036`. Confirmed so far: the app installs and launches; the manually enabled car hotspot (`ap0`, `192.168.43.1/24`) passes readiness and cross-device mDNS/NSD checks; cached vehicle Bluetooth status is readable; and wired USBMUX/Lockdown TLS reaches the CarKit service and closes cleanly. This does **not** establish a working CarPlay session. The production connection path remains disabled, an authorized MFi provider is unresolved, and no usable E01 Bluetooth RFCOMM/iAP2 path or wireless CarPlay session is confirmed. See the [E01 compatibility findings](docs/COMPATIBILITY.md#geely-android-51--api-22-port-phase-3a), [wireless feasibility report](docs/PHASE3W1_E01_WIRELESS_FEASIBILITY.md), and [CarKit transport result](docs/PHASE3D2W_CARKIT_SERVICE_TCP_TLS.md).
 
 [Download & website](https://shihabal3amri.github.io/DiPlay/) · [Release](https://github.com/shihabal3amri/DiPlay/releases/tag/v0.2.12) · [Report a problem](https://github.com/shihabal3amri/DiPlay/issues/new/choose)
 
