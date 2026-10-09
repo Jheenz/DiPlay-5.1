@@ -10,65 +10,69 @@
 
 ![DiPlay home](site/assets/home.png)
 
-## 0.2.12 — public preview
+## Development status
 
-Install on the **car**, not the iPhone. No jailbreak, dongle, Mac, account or authentication server is required for use. Core CarPlay does not require ADB; optional dashboard, battery, wheel-speed and parked-video features do. Your head unit must permit APK installation. Wireless supports Wi-Fi Direct, the car’s existing hotspot or Existing Wi-Fi / Same LAN; Wi-Fi Direct requires Android 10+; the APK supports Android 9+ for wired use.
+**Status as of 2026-10-09.** The public `v0.2.12` line targets compatible BYD head units. The Geely work below is a separate API22 engineering investigation; it is not a Geely release, supported configuration or claim of successful CarPlay.
 
-- Wired USB and wireless CarPlay with local authentication.
-- BYD HUD navigation with arrows, distance and street names on verified firmware.
-- Car hotspot support, improved audio buffering and saved receive diagnostics.
-- Automatic address discovery, fixed-channel Wi-Fi fallbacks and successful-configuration memory.
-- Icon/text size, resolution and frame rate; applying a display change reconnects CarPlay.
-- Local diagnostic export. Reports are sent only if you choose to share them.
-- Separate installation alongside DiAuto. Run one projection app at a time.
+### Geely E01 target
 
-This is **not an Apple-certified product**. The APK bundles an experimental accessory identity recovered from public Carlinkit firmware, not a newly provisioned MFi identity for DiPlay. A bundled private key is extractable. Acceptance after future iOS updates, reliability across head units and suitability of that identity for general distribution are unresolved. This release invites community testing; it is not a guarantee of universal compatibility.
+| Item | Value |
+|---|---|
+| Vehicle / head unit | Geely Okavango, `alps E01` |
+| Platform | MediaTek MT6735; Android 5.1 / API 22 |
+| Reported firmware | `SWVX11A0126H5173.00036` |
+| Research objective | Establish whether the existing wired and wireless DiPlay transports can be supported without changing production safety gates |
+| Current CarPlay result | No complete CarPlay session confirmed; `LegacyLaunchBuild.CONNECTIONS_ENABLED` remains `false` |
 
-Earlier releases were tested on the development DiLink5.1 car: live windshield guidance and street names work, Car hotspot now starts CarPlay, and Wi-Fi Direct performance is substantially improved. Occasional audio cutouts remain and are deferred to a later update. The floating-map test build was installed on the development DiLink 5.1 car; feedback led to the pinch corrections in 0.2.9. Earlier wheel-speed and video contributions were tested on a BYD Tang with DiLink 5.0 and an iPhone 15 Pro on iOS 27; wheel-speed dead reckoning in tunnels remains unverified. Broader head-unit and iOS compatibility is not guaranteed. The HUD firmware scope and cleanup limits are documented in [BYD navigation](docs/BYD_NAVIGATION.md).
+### Verified milestones
 
-## What’s new in 0.2.12
+| Milestone | Evidence | What it does not prove |
+|---|---|---|
+| Phase 3A: API22 install, launch and network diagnostics | Real E01 runs the test app. The manually enabled hotspot exposed `ap0` at `192.168.43.1/24`; manual readiness and cross-device system NSD/mDNS passed. | No CarPlay advertisement, phone handshake, connection or projection. |
+| Phase 3B: Bluetooth/OEM interface audit | A manual, zero-flag NForetek cache read returned vehicle Bluetooth `GEELY_BT` enabled/state 302. Static vendor APK review found the installed SPP implementation is no-op; the Geely SPP accessor returns null. | No iPhone SDP result, working RFCOMM/iAP2 byte path, or CarPlay-specific Bluetooth discovery. The separate Android `CAR_BT` adapter was observed disabled. |
+| Phase 3D.2W: wired transport boundary | Real E01 completed USBMUX/Lockdown, CarKit service TCP/TLS peer validation, encrypted StopSession and cleanup. | No CarKit application bytes, iAP2, MFi authentication or CarPlay session were sent. |
+| Phase 3D.3B: offline wired protocol review | The source-level CSM/iAP2 state machines have focused synthetic tests; API22-minimum debug assembly passes. | Synthetic tests do not demonstrate iPhone acceptance or protocol interoperability. |
+| Phase 3D.3A: MFi provider audit | No authorized E01 MFi identity/provider or ordinary-app access path is established. | This is bounded by collected artifacts; it does not prove no uncollected firmware component exists. |
+| Phase 3D.3C/D: third-party APK review | Static analysis found a DiPlay-derived API26+ HUD build with a local-provider code path. | Its identity was not inspected or reused; authorization, selection, iPhone acceptance and successful projection are unverified. It cannot run on API22. |
+| Phase 3W.1: wireless feasibility | A manual, one-shot API22 capability snapshot is available in Settings diagnostics. | It has not yet been captured on the E01. It cannot reveal chipset/driver, SoftAP-specific bands or AP+STA concurrency. |
 
-- Add Existing Wi-Fi / Same LAN wireless CarPlay with scoped IPv4/IPv6 discovery and network-change cleanup (#223).
-- Wait for a stable car-hotspot interface and recover bounded wireless attempts when no AirPlay TCP follows StartSession (#229); add observed-state, authorized-ADB hotspot fallback on firmware exposing supported commands (#235).
-- Improve Apple USB attach matching and narrowly scoped optional USB-prompt assistance (#170, #224).
-- Pause Android 10 station scans during eligible hotspot/P2P sessions, preserving Same LAN, with controller leases and durable retryable restoration (#225).
-- Improve split-screen, launcher cards, short-screen preparation and virtual cluster/floating-map geometry (#171, #172, #181).
-- Add independent system-bar controls and correct in-session save/cancel and Local/USB-CH341 authentication selection (#191, #194).
-- Add system, light-sensor, day and night CarPlay appearance modes, richer custom turn cards, and live main-video picture controls (#178, #193, #211).
-- Offer custom integer resolution from 30% to 160%, with shared limits, correct 30%/160% labels and decoder/canvas capability fallback; refresh connection settings on resume (#179, #230, #196).
-- Reconcile opt-in DiLink 4 cluster routing/calibration into one decoder owner, retain verified HUD gates, and journal exact stock-map holds and recovery (#213, #187).
-- Add DiLink 3 guidance text and projection-display support with committed recovery before mutation, partial-setup compensation and retryable stock restoration (#182).
-- Add opt-in wheel map zoom and main-screen joystick while preserving press/release and call behavior; reject stale queued work across phone/screen changes (#214, #231).
-- Switch supported dashboard contents live using actual delivery and safely retained paused choices; preserve selection across stream/phone replacement (#232).
-- Add a five-second dashboard-song-on-change window with timer invalidation, and retain album art while the next transfer is pending (#215, #228).
-- Export reports through Downloads, document picker, app-external or private fallback storage, with explicit View/Share actions (#185, #219).
+### Transport boundary
 
-See [0.2.12 release notes](docs/RELEASE-NOTES-0.2.12.md) and [validation](docs/VALIDATION.md) for the full reviewed changes, contributor evidence and remaining hardware checks. Higher resolution costs more decoder/GPU work; above 100% is not a recommended default. Supported firmware and authorization are still required for optional BYD paths. General stutter, calls/Siri, iOS 15 startup and model-specific reports remain under investigation.
+```text
+Wired, verified through transport only:
+iPhone USB -> USBMUX -> Lockdown pairing/session TLS -> StartService -> CarKit TCP/TLS -> clean StopSession
+																	^ last real-E01 application boundary
 
-If a problem remains, reproduce it on **0.2.12**, then use **Settings → Diagnostics → Save diagnostic report**. Android 10+ normally saves to **Downloads/DiPlay**; Android 9 uses the document picker. If unavailable, use **View report** or **Share** from the confirmation, which identifies external/private fallback storage. Review the `.txt` and add it to a matching [existing issue](https://github.com/shihabal3amri/DiPlay/issues), or [create one](https://github.com/shihabal3amri/DiPlay/issues/new/choose). Include vehicle/head-unit model, exact firmware and Android/DiLink, phone/iOS, connection backend, relevant settings, steps and failure time. Reports are shared only when you choose; never post your hotspot password.
+Wireless, source path only:
+Bluetooth RFCOMM/iAP2 bootstrap -> Wi-Fi endpoint handoff -> tunneled iAP2 -> AirPlay media
+```
 
-## Documentation
+The Geely work has **not** crossed the CarKit service/TLS boundary with application data. The wireless path is not runnable in the current build and its required E01 Bluetooth transport is not established.
 
-[Existing Wi-Fi / Same LAN](docs/EXISTING_WIFI.md) keeps the iPhone and head unit
-on an external router. See the guide for setup, build requirements and the
-BYD DiLink 4.0 / Android 10 clean-install validation result.
+### Open engineering gates
 
-- [Install and connect](docs/INSTALL.md)
-- [Compatibility and troubleshooting](docs/COMPATIBILITY.md)
-- [Privacy and diagnostic reports](docs/PRIVACY.md)
-- [Build from source](docs/BUILD.md)
-- [Validation](docs/VALIDATION.md)
-- [Release notes](CHANGELOG.md)
-- [Credits and licenses](docs/THIRD_PARTY_NOTICES.md)
+- **MFi:** obtain an authorized identity/signing provider and its supported E01 access contract. Do not use the Reddit APK's identity or another accessory's credentials.
+- **Bluetooth:** establish an authorized, functioning Bluetooth discovery/RFCOMM/iAP2 route. Generic HFP/A2DP and a cached NForetek status are not sufficient; the audited Geely SPP service cannot carry bytes.
+- **Wi-Fi:** record the manual snapshot's API-visible Wi-Fi Direct feature, 5 GHz radio support, GPS feature declaration and current link frequency. E01 Wi-Fi chipset/driver, 2.4 GHz support, SoftAP band and STA+AP concurrency remain unknown.
+- **API22/OEM:** Android 5.1 has no public LocalOnlyHotspot API; DiPlay's credentialed Wi-Fi Direct path requires API29. Current E01 evidence only supports observing a manually enabled OEM hotspot, not enabling/configuring it from DiPlay.
+- **Safety gate:** keep production connections and vendor integration disabled until the provider, Bluetooth transport and authorized test sequence are established.
 
-The website is available in English, Arabic, Russian, Ukrainian, Spanish and Simplified Chinese. The app interface supports those same six languages. Choose the app language in Settings; on Android 13+, it stays synchronized with Android’s per-app language setting.
+The snapshot is manual and one-shot per Settings Activity instance. It reads public framework metadata only: no scan, hotspot change, Bluetooth discovery, pairing, connection or advertisement. It does not read network identifiers, locations, vendor state or credential material. Follow the single parked-car capture procedure in the [Phase 3W.1 report](docs/PHASE3W1_E01_WIRELESS_FEASIBILITY.md).
 
-## Source and credits
+## Developer workflow
 
-Based on [xcertplay](https://github.com/shilapi/xcertplay), GPL-3.0. The home/settings UI and website adapt [DiAuto](https://github.com/shihabal3amri/DiAuto), AGPL-3.0; that license is included in `docs/licenses`. Preserve those notices when distributing modifications. CarPlay and its icon belong to Apple Inc.; no Apple or BYD affiliation or endorsement is implied.
+Requirements and credential-safe packaging rules are in [Build from source](docs/BUILD.md). The core focused check is:
 
-This repository starts with a clean public source snapshot. Local research, tester reports and release-signing secrets are excluded. The complete source corresponding to the APK is provided with every release; experimental runtime identity assets are described separately in the build instructions and notices.
+```sh
+./gradlew :shared:testDebugUnitTest :common:testDebugUnitTest :mobile:assembleDebug
+```
 
-## Local release packaging
+For the Geely E01 track, start with [Compatibility](docs/COMPATIBILITY.md), [Testing](docs/TESTING.md), the [Phase 3W.1 feasibility report](docs/PHASE3W1_E01_WIRELESS_FEASIBILITY.md), and the milestone reports linked above. Do not interpret a passing build, mock test or transport-only hardware test as a CarPlay pass.
 
-The release APK intentionally contains the experimental accessory identity. The Git repository and source archive exclude all accessory and Android signing keys; tests generate synthetic identities at runtime. Source/CI builds omit runtime identity assets by default. Local release builds explicitly select an external asset directory. Publishing the APK makes its bundled identity extractable; building locally does not preserve that identity's confidentiality.
+## Release and security notes
+
+The `v0.2.12` release is a public preview for compatible BYD head units; see [release notes](docs/RELEASE-NOTES-0.2.12.md), [validation](docs/VALIDATION.md), and [BYD navigation scope](docs/BYD_NAVIGATION.md). Broader head-unit and iOS compatibility is not guaranteed. Reports are shared only when the user chooses; review them before posting and never include hotspot passwords.
+
+This is **not an Apple-certified product**. The public APK includes an experimental accessory identity recovered from public Carlinkit firmware; it is extractable and is not established as an authorized DiPlay identity. The Git repository excludes runtime credential assets by default; local release packaging is described in [Build from source](docs/BUILD.md) and [third-party notices](docs/THIRD_PARTY_NOTICES.md). No Apple or BYD affiliation or endorsement is implied.
+
+Based on [xcertplay](https://github.com/shilapi/xcertplay), GPL-3.0. The home/settings UI and website adapt [DiAuto](https://github.com/shihabal3amri/DiAuto), AGPL-3.0; preserve those notices when distributing modifications. The website and app interface are available in English, Arabic, Russian, Ukrainian, Spanish and Simplified Chinese.
